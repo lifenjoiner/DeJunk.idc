@@ -11,6 +11,9 @@
 
 extern total_junks;
 
+extern junks_start_ea;
+extern junks_end_ea;
+
 //static de_junk(long start, long end, string junk_sig, long len_sig, long len_operand);
 static de_junk(start, end, junk_sig, len_sig, len_operand)
 {
@@ -113,20 +116,32 @@ static de_junks(start, end)
 static main(void)
 {
     auto ea, ea_start;
+    auto n;
     //
     // Message("MinEA(), MaxEA(): %x, %x\n", MinEA(), MaxEA());
     total_junks = 0;
+    junks_start_ea = MaxEA();
+    junks_end_ea = MinEA();
     for (ea = MaxEA() - 1; ea > MinEA(); ) {
         ea_start = PrevFchunk(ea);
         if (ea_start == BADADDR || ea < MinEA()) break;
         //
+        n = total_junks;
         de_junks(ea_start, ea);
+        if (n < total_junks) {
+            if (junks_end_ea < ea) junks_end_ea = ea;
+            if (junks_start_ea > ea_start) junks_start_ea = ea_start;
+        }
         //
         ea = ea_start;
     }
     //
-    AnalyzeArea(MinEA(), MaxEA());
+    n = junks_end_ea - junks_start_ea;
+    if (n > 0) {
+        // MakeUnknown(junks_start_ea, n, DOUNK_SIMPLE);
+        AnalyzeArea(junks_start_ea, junks_end_ea);
+    }
     //
-    Message("total junks removed: %d\n", total_junks);
+    Message("total junks removed [%x, %x]: %d\n", junks_start_ea, junks_end_ea, total_junks);
     Message("Finished!\n");
 }
