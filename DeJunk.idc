@@ -36,8 +36,11 @@ static de_junk(start, end, junk_sig, len_sig, len_operand)
         if (n <= 0) continue;
         // n < 0 ? haven't seen this type.
         // are all data?
-        if ( FindCode(ea_x, SEARCH_DOWN|SEARCH_NEXT) < ea + n ) continue;
-        n = len_sig + len_operand + n;
+        i = len_sig + len_operand + n;
+        if ( FindCode(ea_x, SEARCH_DOWN|SEARCH_NEXT) < ea + i ) continue;
+        // too long may include real data
+        if (ea + i >= end && n > 0x7F) continue;
+        n = i;
         Message("junk code ea: %x len: %d\n", ea, n);
         total_junks++;
         for (i = 0; i < n; i++) PatchByte(ea + i, 0x90);
