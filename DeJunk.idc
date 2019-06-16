@@ -4,6 +4,7 @@
     L: GPL
     
     H:
+    v0.2.0 20190616
     v0.1.0 20190614
 */
 
@@ -21,13 +22,108 @@ extern total_junks;
 extern junks_start_ea;
 extern junks_end_ea;
 
+// return op length
+
+static is_FF_r(ea, ro) {
+    auto op = Byte(ea);
+    if ( op == 0xFF && Byte(ea + 1) >> 3 & 7 == ro ) {
+        return 2;
+    } else {
+        return 0;
+    }
+}
+
+static is_short_jump(ea) {
+    auto op = Byte(ea);
+    if ( (0x70 <= op && op <= 0x7F) || op == 0xE3 || op == 0xEB ) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+static is_near_jump(ea) {
+    auto op = Byte(ea);
+    auto n = 1;
+    if (op == 0x0F) {
+        op = Word(ea);
+        n = 2;
+    }
+    if ( (0x0F80 <= op && op <= 0x0F8F) || op == 0xE9 ) {
+        return n;
+    } else {
+        return 0;
+    }
+}
+
+static is_near_jump_r(ea) {
+    return is_FF_r(ea, 4);
+}
+
+static is_far_jump(ea) {
+    auto op = Byte(ea);
+    if (op == 0xEA) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+static is_far_jump_r(ea) {
+    return is_FF_r(ea, 5);
+}
+
+static is_jump(ea) {
+    return is_short_jump(ea) || is_near_jump(ea) || is_near_jump_r(ea) || is_far_jump(ea) || is_far_jump_r(ea);
+}
+
+static is_near_call(ea) {
+    auto op = Byte(ea);
+    if (op == 0xE8) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+static is_near_call_r(ea) {
+    return is_FF_r(ea, 2);
+}
+
+static is_far_call(ea) {
+    auto op = Byte(ea);
+    if (op == 0x9A) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+static is_far_call_r(ea) {
+    return is_FF_r(ea, 3);
+}
+
+static is_call(ea) {
+    return is_near_call(ea) || is_near_call_r(ea) || is_far_call(ea) || is_far_call_r(ea);
+}
+
+static is_retn(ea) {
+    auto op = Byte(ea);
+    if (op == 0xC3 || op == 0xCB || op == 0xC2 || op == 0xCA || op == 0xCF) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
 /*  skip useless code to reduce the code size
     For every junk code, we fix it's caller's operand.
     So, we get the codes slimmed.
+    Far jmp/call shouldn't be in this case, leave it.
 */
 static skip_junk(start, len_skip) {
-    auto cur, t, op, cur_x, opnd;
-    for (cur = RfirstB(start); cur != BADADDR; cur = RnextB(start, cur)) {
+    auto cur, t, op, cur_x, n, opnd;
+    for (cur = RfirstB0(start); cur != BADADDR; cur = RnextB0(start, cur)) {
         t = XrefType();
         //GetOpType(cur, 0); // 7, short or near?
         op = Byte(cur);
@@ -37,31 +133,27 @@ static skip_junk(start, len_skip) {
             cur_x++;
             op = Byte(cur_x);
         }
-        if (op == 0x0F) {
-            op = Word(cur_x);
-            cur_x = cur_x + 2;
-        }
-         //Message("op: %x\n", op);
+        //
         if (t == fl_CN) {
-            if (op == 0xE8) {
+            if ( (n = is_near_call(cur_x)) ) {
+                cur_x = cur_x + n;
                 opnd = Dword(cur_x);
                 // overflow?
                 opnd = opnd + len_skip;
                 if (opnd > 0x7FFFFFFF || opnd < -0x7FFFFFFF) break;
                 PatchDword(cur_x, opnd);
             }
-            // FF/2
         } else if (t == fl_JN) {
-            // short: 70 ~ 7F, E3, EB
-            // near: E9, FF/4, 0F80 ~ 0F8F
-            if ((0x70 <= op && op <= 0x7F) || op == 0xE3 || op == 0xEB) {
+            if ( (n = is_short_jump(cur_x)) ) {
+                cur_x = cur_x + n;
                 opnd = Byte(cur_x);
                 if (opnd > 0x7F) opnd = opnd | 0xFFFFFF00;
                 opnd = opnd + len_skip;
                 // overflow?
                 if (opnd > 0x7F || opnd < -0x7F) break;
                 PatchByte(cur_x, opnd);
-            } else if ((0x0F80 <= op && op <= 0x0F8F) || op == 0xE9 || op == 0xFF) {
+            } else if ( (n = is_near_jump(cur_x)) ) {
+                cur_x = cur_x + n;
                 opnd = Dword(cur_x);
                 // overflow?
                 opnd = opnd + len_skip;
@@ -69,7 +161,7 @@ static skip_junk(start, len_skip) {
                 PatchDword(cur_x, opnd);
             }
         } else if (t == fl_JF || t == fl_CF) {
-            //
+            // shouldn't happen
         }
     }
 }
@@ -114,7 +206,10 @@ static de_junk(start, end, junk_sig, len_sig, len_operand)
         auto found_real_code = 0;
         i = len_sig + len_operand + n;
         while (ea_x = FindCode(ea_x, SEARCH_DOWN|SEARCH_NEXT), ea_x < ea + i) {
-            if (GetFchunkAttr(ea_x, FUNCATTR_START) != BADADDR) {
+            if (GetFchunkAttr(ea_x, FUNCATTR_START) != BADADDR
+                // further determination on the junk data that can be treated as code
+                && ( RfirstB0(ea_x) != BADADDR || is_retn(ea_x) || is_call(ea_x) || is_jump(ea_x) )
+            ) {
                 found_real_code = 1;
                 break;
             }
@@ -129,8 +224,6 @@ static de_junk(start, end, junk_sig, len_sig, len_operand)
         for (i = 0; i < n; i++) PatchByte(ea + i, 0x90);
         //
         skip_junk(ea, n);
-        //
-        RemoveFchunk(ea, ea);
     }
 }
 
@@ -139,23 +232,34 @@ static de_junk(start, end, junk_sig, len_sig, len_operand)
 // https://www.felixcloutier.com/x86/
 // http://ref.x86asm.net/coder32.html
 // http://ref.x86asm.net/#column_op
+
+// https://stackoverflow.com/questions/15209993/what-does-opcode-ff350e204000-do?rq=1
+// https://wiki.osdev.org/X86-64_Instruction_Encoding#ModR.2FM
+
 // https://en.wikibooks.org/wiki/X86_Assembly/16,_32,_and_64_Bits
+
+// Far jump:
+   A jump to an instruction located in a different segment than the current code segment
+   but at the same privilege level, sometimes referred to as an intersegment jump.
+// Far Call:
+   A call to a procedure located in a different segment than the current code segment,
+   sometimes referred to as an inter-segment call.
 
 ?   Opcode  Mnemonic    operand         comments
     70      Jcc         rel8            8 bits relative offset
     ...     Jcc         rel8
     7F      Jcc         rel8
     
-    9A      CALLF       ptr16:16/32     32-bit or 48-bit pointer direct address
+n   9A      CALLF       ptr16:16/32     32-bit or 48-bit pointer direct address
     E3      J(E)CXZ     rel8
 Y   E8      CALL        rel16/32
-    FF/2    CALL        r/m16/32
-    FF/3    CALLF       m16:16/32
-?   E9      JMP         rel16/32
-    EA      JMPF        ptr16:16/32
+?   FF/2    CALL        r/m16/32
+n   FF/3    CALLF       m16:16/32
+    E9      JMP         rel16/32
+n   EA      JMPF        ptr16:16/32
 Y   EB      JMP         rel8
-    FF/4    JMP         r/m16/32
-    FF/5    JMPF        m16:16/32
+n   FF/4    JMP         r/m16/32
+n   FF/5    JMPF        m16:16/32
     
     0F80    Jcc         rel16/32
     ...     Jcc         rel16/32
@@ -232,6 +336,8 @@ static main(void)
         if (n < total_junks) {
             if (junks_end_ea < ea) junks_end_ea = ea;
             if (junks_start_ea > ea_start) junks_start_ea = ea_start;
+            //
+            RemoveFchunk(ea_start, ea_start);
         }
         //
         ea = ea_start;
