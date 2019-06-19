@@ -272,8 +272,23 @@ leading 0xF2/0xF3: REPxx
 /*  special conditional jump
     CLC
     JNB     Dst
-    db Junks
+    db      Junks
 Dst:
+F873
+
+    STC
+    JB      Dst
+    db      Junks
+Dst:
+F972
+
+;		push	ecx
+;		xor		ecx,ecx
+;		jcxz	label
+;		db		_junkcode
+;label:	pop		ecx
+31 C9 E3
+
 */
 
 /*  2 jumps: true or false with the same dst:
@@ -294,6 +309,11 @@ static de_junks(start, end)
     de_junk(start, end, "F2 E8",    2, 4);
     de_junk(start, end, "F3 E8",    2, 4);
     de_junk(start, end, "E8",       1, 4);
+    //
+    de_junk(start, end, "F8 73",    2, 1);
+    de_junk(start, end, "F9 72",    2, 1);
+    de_junk(start, end, "31 C9 E3", 3, 1);
+    //
 }
 
 
