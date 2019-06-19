@@ -350,6 +350,8 @@ static DeJunks(start, end)
     for (ea = end - 1; ea > start; ) {
         ea_start = PrevFchunk(ea);
         if (ea_start == BADADDR || ea < start) break;
+        // ONLY codes, skip data block, make sure we won't overdo it
+        ea = GetFchunkAttr(ea_start, FUNCATTR_END);
         //
         n = total_junks;
         de_junks(ea_start, ea);
