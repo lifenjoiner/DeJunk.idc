@@ -318,18 +318,18 @@ static de_junks(start, end)
     AskAddr
 */
 
-static main(void)
+static DeJunks(start, end)
 {
     auto ea, ea_start;
     auto n;
     //
-    // Message("MinEA(), MaxEA(): %x, %x\n", MinEA(), MaxEA());
+    // Message("start, end: %x, %x\n", start, end);
     total_junks = 0;
-    junks_start_ea = MaxEA();
-    junks_end_ea = MinEA();
-    for (ea = MaxEA() - 1; ea > MinEA(); ) {
+    junks_start_ea = end;
+    junks_end_ea = start;
+    for (ea = end - 1; ea > start; ) {
         ea_start = PrevFchunk(ea);
-        if (ea_start == BADADDR || ea < MinEA()) break;
+        if (ea_start == BADADDR || ea < start) break;
         //
         n = total_junks;
         de_junks(ea_start, ea);
@@ -350,4 +350,10 @@ static main(void)
     //
     Message("total junks removed [%x, %x]: %d\n", junks_start_ea, junks_end_ea, total_junks);
     Message("Finished!\n");
+}
+
+static main(void)
+{
+    DeJunks(MinEA(), MaxEA());
+    Message("Command available: DeJunks(start, end);\n");
 }
