@@ -358,15 +358,16 @@ static DeJunks(start, end)
         if (n < total_junks) {
             if (junks_end_ea < ea) junks_end_ea = ea;
             if (junks_start_ea > ea_start) junks_start_ea = ea_start;
-            //
+        }
+        // to merge Fchunks
+        if (0 < total_junks) {
             RemoveFchunk(ea_start, ea_start);
         }
         //
         ea = ea_start;
     }
     //
-    n = junks_end_ea - junks_start_ea;
-    if (n > 0) {
+    if (junks_end_ea > junks_start_ea) {
         AnalyzeArea(junks_start_ea, junks_end_ea);
     }
     //
