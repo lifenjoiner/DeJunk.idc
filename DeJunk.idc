@@ -122,12 +122,13 @@ static is_retn(ea) {
     Far jmp/call shouldn't be in this case, leave it.
 */
 static skip_junk(start, len_skip) {
-    auto cur, t, op, cur_x, n, opnd;
+    auto cur, t, op, cur_x, n, opnd_old, opnd;
+    n = 0;
     for (cur = RfirstB0(start); cur != BADADDR; cur = RnextB0(start, cur)) {
         t = XrefType();
+        //Message("xref, type: %x, %d\n", cur, t);
         //GetOpType(cur, 0); // 7, short or near?
         op = Byte(cur);
-        //Message("xref, type: %x, %d\n", cur, t);
         cur_x = cur;
         if (op == 0xF2 || op == 0xF3) {
             cur_x++;
@@ -137,31 +138,67 @@ static skip_junk(start, len_skip) {
         if (t == fl_CN) {
             if ( (n = is_near_call(cur_x)) ) {
                 cur_x = cur_x + n;
-                opnd = Dword(cur_x);
+                opnd_old = Dword(cur_x);
+                opnd = opnd_old + len_skip;
                 // overflow?
-                opnd = opnd + len_skip;
-                if (opnd > 0x7FFFFFFF || opnd < -0x7FFFFFFF) break;
-                PatchDword(cur_x, opnd);
+                if (opnd > 0x7FFFFFFF || opnd < -0x7FFFFFFF) continue;
+                if (len_skip != 0) {
+                    PatchDword(cur_x, opnd);
+                    DelCodeXref(cur, cur_x + 4 + opnd_old, 0);
+                }
+                //Message("dest: %x, %x\n", cur, cur_x + 4 + opnd);
+                n = cur_x + 4 - cur;
             }
         } else if (t == fl_JN) {
             if ( (n = is_short_jump(cur_x)) ) {
                 cur_x = cur_x + n;
-                opnd = Byte(cur_x);
+                opnd_old = Byte(cur_x);
                 if (opnd > 0x7F) opnd = opnd | 0xFFFFFF00;
-                opnd = opnd + len_skip;
+                opnd = opnd_old + len_skip;
                 // overflow?
-                if (opnd > 0x7F || opnd < -0x7F) break;
-                PatchByte(cur_x, opnd);
+                if (opnd > 0x7F || opnd < -0x7F) continue;
+                if (len_skip != 0) {
+                    PatchByte(cur_x, opnd);
+                    DelCodeXref(cur, cur_x + 1 + opnd_old, 0);
+                }
+                //Message("dest: %x, %x\n", cur, cur_x + 1 + opnd);
+                // merge jumps
+                n = cur_x + 1 - cur;
+                if (n != -opnd) {
+                    skip_junk(cur, n + opnd);
+                }
             } else if ( (n = is_near_jump(cur_x)) ) {
                 cur_x = cur_x + n;
-                opnd = Dword(cur_x);
+                opnd_old = Dword(cur_x);
+                opnd = opnd_old + len_skip;
                 // overflow?
-                opnd = opnd + len_skip;
-                if (opnd > 0x7FFFFFFF || opnd < -0x7FFFFFFF) break;
-                PatchDword(cur_x, opnd);
+                if (opnd > 0x7FFFFFFF || opnd < -0x7FFFFFFF) continue;
+                if (len_skip != 0) {
+                    PatchDword(cur_x, opnd);
+                    DelCodeXref(cur, cur_x + 4 + opnd_old, 0);
+                }
+                //Message("dest: %x, %x\n", cur, cur_x + 4 + opnd);
+                // merge jumps
+                n = cur_x + 4 - cur;
+                if (n != -opnd) {
+                    skip_junk(cur, n + opnd);
+                }
             }
         } else if (t == fl_JF || t == fl_CF) {
             // shouldn't happen
+        }
+    }
+    //
+    return n;
+}
+
+static merge_jumps(start, end) {
+    auto ea;
+    for (ea = start; ea < end && ea != BADADDR; ea = FindCode(ea, SEARCH_DOWN|SEARCH_NEXT)) {
+        //Message("merge_jumps ea: %x\n", ea);
+        if (skip_junk(ea, 0) > 0) {
+            if (junks_end_ea < ea) junks_end_ea = ea;
+            if (junks_start_ea > ea) junks_start_ea = ea;
         }
     }
 }
@@ -174,6 +211,19 @@ static skip_mid_nop(start, end) {
 
 // topological merging?
 
+
+static ReAnalyzeArea(start, end)
+{
+    auto ea, ea_start;
+    for (ea = end; ea > start; ) {
+        ea_start = PrevFchunk(ea);
+        if (ea_start == BADADDR || ea < start) break;
+        RemoveFchunk(ea_start, ea_start);
+        DelFunction(ea_start);
+        ea = ea_start;
+    }
+    AnalyzeArea(MinEA(), MaxEA());
+}
 
 //static de_junk(long start, long end, string junk_sig, long len_sig, long len_operand);
 static de_junk(start, end, junk_sig, len_sig, len_operand)
@@ -203,18 +253,35 @@ static de_junk(start, end, junk_sig, len_sig, len_operand)
         // data and code not in a function chunk
         // some junk data would be left as code
         //
-        auto found_real_code = 0;
+        auto flags = 0, found_real_code = 0;
         i = len_sig + len_operand + n;
+        if (is_call(ea)) flags = 0x00008000;
         while (ea_x = FindCode(ea_x, SEARCH_DOWN|SEARCH_NEXT), ea_x < ea + i) {
-            if (GetFchunkAttr(ea_x, FUNCATTR_START) != BADADDR
-                // further determination on the junk data that can be treated as code
-                && ( RfirstB0(ea_x) != BADADDR || is_retn(ea_x) || is_call(ea_x) || is_jump(ea_x) )
-            ) {
+            // further determination on the junk data that can be treated as code
+            if (RfirstB0(ea_x) != BADADDR) {
+                flags = flags + 0x01000000;
+            }
+            else if (is_retn(ea_x)) {
+                if (flags & 0x00008000 == 0x00008000) {
+                    flags = flags + 0x00100000;
+                }
+                else {
+                    flags = flags + 0x00010000;
+                }
+            }
+            else if (is_call(ea_x) || is_jump(ea_x)) {
+                flags = flags + 0x00010000;
+            }
+            else if (GetFchunkAttr(ea_x, FUNCATTR_START) != BADADDR) {
+                flags = flags + 1;
+            }
+            // Not only 1 fake command?
+            if (flags > 0x1 && flags != 0x10000 && flags != 0x8001 && flags != 0x18000) {
                 found_real_code = 1;
                 break;
             }
         }
-        if (found_real_code == 1) continue;
+        if (found_real_code > 0) continue;
         // too long may include real data
         if (ea + i >= end && n > JUNK_DATA_LEN) continue;
         //
@@ -347,7 +414,7 @@ static DeJunks(start, end)
     total_junks = 0;
     junks_start_ea = end;
     junks_end_ea = start;
-    for (ea = end - 1; ea > start; ) {
+    for (ea = end; ea > start; ) {
         ea_start = PrevFchunk(ea);
         if (ea_start == BADADDR || ea < start) break;
         // ONLY codes, skip data block, make sure we won't overdo it
@@ -359,24 +426,21 @@ static DeJunks(start, end)
             if (junks_end_ea < ea) junks_end_ea = ea;
             if (junks_start_ea > ea_start) junks_start_ea = ea_start;
         }
-        // to merge Fchunks
-        if (0 < total_junks) {
-            RemoveFchunk(ea_start, ea_start);
-        }
         //
         ea = ea_start;
     }
-    //
+    // analyse in global scope
+    merge_jumps(start, end);
     if (junks_end_ea > junks_start_ea) {
-        AnalyzeArea(junks_start_ea, junks_end_ea);
+        ReAnalyzeArea(junks_start_ea, junks_end_ea);
     }
     //
-    Message("total junks removed [%x, %x]: %d\n", junks_start_ea, junks_end_ea, total_junks);
+    Message("total junks removed [0x%x, 0x%x]: %d\n", junks_start_ea, junks_end_ea, total_junks);
     Message("Finished!\n");
 }
 
 static main(void)
 {
     DeJunks(MinEA(), MaxEA());
-    Message("Command available: DeJunks(start, end);\n");
+    Message("Command available: DeJunks(MinEA(), MaxEA());\n");
 }
