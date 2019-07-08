@@ -35,7 +35,16 @@ static is_FF_r(ea, ro) {
 
 static is_short_jump(ea) {
     auto op = Byte(ea);
-    if ( (0x70 <= op && op <= 0x7F) || op == 0xE3 || op == 0xEB ) {
+    if ( op == 0xEB ) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+static is_short_jxc(ea) {
+    auto op = Byte(ea);
+    if ( (0x70 <= op && op <= 0x7F) || op == 0xE3 ) {
         return 1;
     } else {
         return 0;
@@ -45,11 +54,21 @@ static is_short_jump(ea) {
 static is_near_jump(ea) {
     auto op = Byte(ea);
     auto n = 1;
+    if ( op == 0xE9 ) {
+        return n;
+    } else {
+        return 0;
+    }
+}
+
+static is_near_jxc(ea) {
+    auto op = Byte(ea);
+    auto n = 1;
     if (op == 0x0F) {
-        op = Word(ea);
+        op = op * 256 + Byte(ea + 1);
         n = 2;
     }
-    if ( (0x0F80 <= op && op <= 0x0F8F) || op == 0xE9 ) {
+    if ( 0x0F80 <= op && op <= 0x0F8F ) {
         return n;
     } else {
         return 0;
@@ -74,7 +93,7 @@ static is_far_jump_r(ea) {
 }
 
 static is_jump(ea) {
-    return is_short_jump(ea) || is_near_jump(ea) || is_near_jump_r(ea) || is_far_jump(ea) || is_far_jump_r(ea);
+    return is_short_jump(ea) || is_short_jxc(ea) || is_near_jump(ea) || is_near_jxc(ea) || is_near_jump_r(ea) || is_far_jump(ea) || is_far_jump_r(ea);
 }
 
 static is_near_call(ea) {
@@ -116,6 +135,37 @@ static is_retn(ea) {
     }
 }
 
+static patch_byte_operand(ea, op_len, len_skip) {
+    auto cur_x, opnd_old, opnd;
+
+    cur_x = ea + op_len;
+    opnd_old = Byte(cur_x);
+    if (opnd_old > 0x7F) opnd_old = opnd_old | 0xFFFFFF00;
+    opnd = opnd_old + len_skip;
+    // overflow?
+    if (opnd > 0x7F || opnd < -0x7F) return 0;
+    if (len_skip != 0) {
+        PatchByte(cur_x, opnd);
+        DelCodeXref(ea, cur_x + 1 + opnd_old, 0);
+    }
+    return opnd;
+}
+
+static patch_dword_operand(ea, op_len, len_skip) {
+    auto cur_x, opnd_old, opnd;
+
+    cur_x = ea + op_len;
+    opnd_old = Dword(cur_x);
+    opnd = opnd_old + len_skip;
+    // overflow?
+    if (opnd > 0x7FFFFFFF || opnd < -0x7FFFFFFF) return 0;
+    if (len_skip != 0) {
+        PatchDword(cur_x, opnd);
+        DelCodeXref(ea, cur_x + 4 + opnd_old, 0);
+    }
+    return opnd;
+}
+
 /*  skip useless code to reduce the code size
     For every junk code, we fix it's caller's operand.
     So, we get the codes slimmed.
@@ -139,53 +189,46 @@ static skip_junk(start, len_skip) {
         n = 0;
         //
         if (t == fl_CN) {
-            if ( (n = is_near_call(cur_x)) ) {
-                cur_x = cur_x + n;
-                opnd_old = Dword(cur_x);
-                opnd = opnd_old + len_skip;
-                // overflow?
-                if (opnd > 0x7FFFFFFF || opnd < -0x7FFFFFFF) continue;
-                if (len_skip != 0) {
-                    PatchDword(cur_x, opnd);
-                    DelCodeXref(cur, cur_x + 4 + opnd_old, 0);
-                }
+            if ( n = is_near_call(cur_x) ) {
+                n = n + cur_x - cur;
+                opnd = patch_dword_operand(cur, n, len_skip);
+                if ( !opnd ) continue;
                 //Message("dest: %x, %x\n", cur, cur_x + 4 + opnd);
-                n = cur_x + 4 - cur;
+                n = n + 4;
             }
         } else if (t == fl_JN) {
-            if ( (n = is_short_jump(cur_x)) ) {
-                cur_x = cur_x + n;
-                opnd_old = Byte(cur_x);
-                if (opnd_old > 0x7F) opnd_old = opnd_old | 0xFFFFFF00;
-                opnd = opnd_old + len_skip;
-                // overflow?
-                if (opnd > 0x7F || opnd < -0x7F) continue;
-                if (len_skip != 0) {
-                    PatchByte(cur_x, opnd);
-                    DelCodeXref(cur, cur_x + 1 + opnd_old, 0);
-                }
+            if ( n = is_short_jump(cur_x) ) {
+                n = n + cur_x - cur;
+                opnd = patch_byte_operand(cur, n, len_skip);
+                if ( !opnd ) continue;
                 //Message("dest: %x, %x\n", cur, cur_x + 1 + opnd);
                 // merge jumps
-                n = cur_x + 1 - cur;
+                n = n + 1;
                 if (n != -opnd) {
                     retn = retn + skip_junk(cur, n + opnd);
                 }
-            } else if ( (n = is_near_jump(cur_x)) ) {
-                cur_x = cur_x + n;
-                opnd_old = Dword(cur_x);
-                opnd = opnd_old + len_skip;
-                // overflow?
-                if (opnd > 0x7FFFFFFF || opnd < -0x7FFFFFFF) continue;
-                if (len_skip != 0) {
-                    PatchDword(cur_x, opnd);
-                    DelCodeXref(cur, cur_x + 4 + opnd_old, 0);
-                }
+            } else if ( n = is_short_jxc(cur_x) ) {
+                n = n + cur_x - cur;
+                opnd = patch_byte_operand(cur, n, len_skip);
+                if ( !opnd ) continue;
+                //Message("dest: %x, %x\n", cur, cur_x + 1 + opnd);
+                n = n + 1;
+            } else if ( n = is_near_jump(cur_x) ) {
+                n = n + cur_x - cur;
+                opnd = patch_dword_operand(cur, n, len_skip);
+                if ( !opnd ) continue;
                 //Message("dest: %x, %x\n", cur, cur_x + 4 + opnd);
                 // merge jumps
-                n = cur_x + 4 - cur;
+                n = n + 4;
                 if (n != -opnd) {
                     retn = retn + skip_junk(cur, n + opnd);
                 }
+            } else if ( n = is_near_jxc(cur_x) ) {
+                n = n + cur_x - cur;
+                opnd = patch_dword_operand(cur, n, len_skip);
+                if ( !opnd ) continue;
+                //Message("dest: %x, %x\n", cur, cur_x + 4 + opnd);
+                n = n + 4;
             }
         } else if (t == fl_JF || t == fl_CF) {
             // shouldn't happen
@@ -438,9 +481,11 @@ static DeJunks(start, end)
     merge_jumps(start, end);
     if (junks_end_ea > junks_start_ea) {
         ReAnalyzeArea(junks_start_ea, junks_end_ea);
+        Refresh();
     }
     //
-    Message("total junks removed [0x%x, 0x%x]: %d\n", junks_start_ea, junks_end_ea, total_junks);
+    Message("junks range [0x%x, 0x%x]\n", junks_start_ea, junks_end_ea);
+    Message("total junks removed [0x%x, 0x%x]: %d\n", start, end, total_junks);
     Message("Finished!\n");
 }
 
