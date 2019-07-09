@@ -171,7 +171,7 @@ static patch_dword_operand(ea, op_len, len_skip) {
     So, we get the codes slimmed.
     Far jmp/call shouldn't be in this case, leave it.
 */
-static skip_junk(start, len_skip) {
+static skip_junk(start, len_skip, recur) {
     auto cur, t, op, cur_x, n, opnd_old, opnd;
     auto retn = 0;
     n = 0;
@@ -204,8 +204,8 @@ static skip_junk(start, len_skip) {
                 //Message("dest: %x, %x\n", cur, cur_x + 1 + opnd);
                 // merge jumps
                 n = n + 1;
-                if (n != -opnd) {
-                    retn = retn + skip_junk(cur, n + opnd);
+                if (recur && n != -opnd) {
+                    retn = retn + skip_junk(cur, n + opnd, recur);
                 }
             } else if ( n = is_short_jxc(cur_x) ) {
                 n = n + cur_x - cur;
@@ -220,8 +220,8 @@ static skip_junk(start, len_skip) {
                 //Message("dest: %x, %x\n", cur, cur_x + 4 + opnd);
                 // merge jumps
                 n = n + 4;
-                if (n != -opnd) {
-                    retn = retn + skip_junk(cur, n + opnd);
+                if (recur && n != -opnd) {
+                    retn = retn + skip_junk(cur, n + opnd, recur);
                 }
             } else if ( n = is_near_jxc(cur_x) ) {
                 n = n + cur_x - cur;
@@ -243,7 +243,7 @@ static skip_junk(start, len_skip) {
 static merge_jumps(start, end) {
     auto ea;
     for (ea = start; ea < end && ea != BADADDR; ea = FindCode(ea, SEARCH_DOWN|SEARCH_NEXT)) {
-        if (skip_junk(ea, 0) > 0) {
+        if (skip_junk(ea, 0, 1) > 0) {
             Message("merge_jumps ea: %x\n", ea);
             if (junks_end_ea < ea) junks_end_ea = ea;
             if (junks_start_ea > ea) junks_start_ea = ea;
@@ -338,7 +338,7 @@ static de_junk(start, end, junk_sig, len_sig, len_operand)
         total_junks++;
         for (i = 0; i < n; i++) PatchByte(ea + i, 0x90);
         //
-        skip_junk(ea, n);
+        skip_junk(ea, n, 0);
     }
 }
 
