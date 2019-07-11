@@ -166,6 +166,11 @@ static patch_dword_operand(ea, op_len, len_skip) {
     return opnd;
 }
 
+static nop_bytes(ea, len) {
+    auto i;
+    for (i = 0; i < len; i++) PatchByte(ea + i, 0x90);
+}
+
 /*  skip useless code to reduce the code size
     For every junk code, we fix it's caller's operand.
     So, we get the codes slimmed.
@@ -173,7 +178,9 @@ static patch_dword_operand(ea, op_len, len_skip) {
 */
 static skip_junk(start, len_skip, recur) {
     auto cur, t, op, cur_x, n, opnd_old, opnd;
-    auto retn = 0;
+    auto retn, counter;
+    retn = 0;
+    counter = 0;
     n = 0;
     for (cur = RfirstB0(start); cur != BADADDR; cur = RnextB0(start, cur)) {
         t = XrefType();
@@ -183,7 +190,6 @@ static skip_junk(start, len_skip, recur) {
         cur_x = cur;
         if (op == 0xF2 || op == 0xF3) {
             cur_x++;
-            op = Byte(cur_x);
         }
         //
         n = 0;
@@ -234,7 +240,24 @@ static skip_junk(start, len_skip, recur) {
             // shouldn't happen
         }
         //
+        counter++;
         if (len_skip != 0 && n != 0) retn++;
+    }
+    // the ones in middle: all jump to this are updated?
+    if (recur && len_skip && counter && counter == retn) {
+        op = Byte(cur);
+        cur_x = start;
+        if (op == 0xF2 || op == 0xF3) {
+            cur_x++;
+        }
+        if (is_short_jump(cur_x)) {
+            n = cur_x - start + 2;
+        }
+        else if (is_near_jump(cur_x)) {
+            n = cur_x - start + 5;
+        }
+        //
+        nop_bytes(start, n);
     }
     //
     return retn;
@@ -320,6 +343,9 @@ static de_junk(start, end, junk_sig, len_sig, len_operand)
             else if (is_call(ea_x) || is_jump(ea_x)) {
                 flags = flags + 0x00010000;
             }
+            else if ( Byte(ea_x) == 0x90 ) {
+                // ignore nop
+            }
             else if (GetFchunkAttr(ea_x, FUNCATTR_START) != BADADDR) {
                 flags = flags + 1;
             }
@@ -336,7 +362,8 @@ static de_junk(start, end, junk_sig, len_sig, len_operand)
         n = i;
         Message("junk code ea: %x len: %d\n", ea, n);
         total_junks++;
-        for (i = 0; i < n; i++) PatchByte(ea + i, 0x90);
+        //
+        nop_bytes(ea, n);
         //
         skip_junk(ea, n, 0);
     }
@@ -464,7 +491,7 @@ static DeJunks(start, end)
     if (junks_end_ea == 0) junks_end_ea = start;
     for (ea = end; ea > start; ) {
         ea_start = PrevFchunk(ea);
-        if (ea_start == BADADDR || ea < start) break;
+        if (ea_start == BADADDR || ea_start < start) break;
         // ONLY codes, skip data block, make sure we won't overdo it
         ea = GetFchunkAttr(ea_start, FUNCATTR_END);
         //
