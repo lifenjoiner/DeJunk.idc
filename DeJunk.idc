@@ -173,6 +173,21 @@ static nop_bytes(ea, len) {
     for (i = 0; i < len; i++) PatchByte(ea + i, 0x90);
 }
 
+static is_not_xref_block(ea) {
+    auto cur;
+    cur = ea;
+    // all previous codes have NO xref to
+    while ( (cur = RfirstB(cur)) != BADADDR) {
+        if (FindData(cur, SEARCH_DOWN) > FindCode(cur, SEARCH_DOWN)) {
+            if (RfirstB0(cur) != BADADDR) return 0;
+        }
+        else {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /*  skip useless code to reduce the code size
     For every junk code, we fix it's caller's operand.
     So, we get the codes slimmed.
@@ -246,7 +261,7 @@ static skip_junk(start, len_skip, recur) {
         if (len_skip != 0 && n != 0) retn++;
     }
     // the ones in middle: all jump to this are updated?
-    if (recur && len_skip && counter && counter == retn) {
+    if (recur && len_skip && counter && counter == retn && is_not_xref_block(start)) {
         op = Byte(cur);
         cur_x = start;
         if (op == 0xF2 || op == 0xF3) {
