@@ -261,24 +261,32 @@ static skip_junk(start, len_skip, recur) {
         if (len_skip != 0 && n != 0) retn++;
     }
     // the ones in middle: all jump to this are updated?
-    if (recur && len_skip && counter && counter == retn && is_not_xref_block(start)) {
-        op = Byte(cur);
-        cur_x = start;
-        if (op == 0xF2 || op == 0xF3) {
-            cur_x++;
-        }
-        if (n = is_short_jump(cur_x)) {
-            opnd = Byte(cur_x + n);
-            if (opnd > 0x7F) opnd = opnd | 0xFFFFFF00;
-            n = cur_x - start + n + 1;
-        }
-        else if (n = is_near_jump(cur_x)) {
-            opnd = Dword(cur_x + n);
-            n = cur_x - start + n + 4;
-        }
+    if (recur && len_skip && counter && counter == retn) {
         //
-        nop_bytes(start, n);
+        n = 0;
+        opnd = 0;
+        //
+        if (is_not_xref_block(start)) {
+            op = Byte(cur);
+            cur_x = start;
+            if (op == 0xF2 || op == 0xF3) {
+                cur_x++;
+            }
+            if (n = is_short_jump(cur_x)) {
+                opnd = Byte(cur_x + n);
+                if (opnd > 0x7F) opnd = opnd | 0xFFFFFF00;
+                n = cur_x - start + n + 1;
+            }
+            else if (n = is_near_jump(cur_x)) {
+                opnd = Dword(cur_x + n);
+                n = cur_x - start + n + 4;
+            }
+        }
+        // nop
+        //
+        if (n > 0) nop_bytes(start, n);
         DelCodeXref(start, start + n + opnd, 0);
+        MakeName(start, "");
     }
     //
     return retn;
@@ -392,6 +400,7 @@ static de_junk(start, end, junk_sig, len_sig, len_operand, tail, len_tail)
         //
         nop_bytes(ea, n);
         DelCodeXref(ea, ea + n, 0);
+        MakeName(ea + n, "");
         //
         skip_junk(ea, n, 0);
         //
