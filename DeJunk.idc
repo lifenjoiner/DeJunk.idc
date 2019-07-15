@@ -288,7 +288,7 @@ static merge_jumps(start, end) {
     auto ea, n, total;
     total = 0;
     for (ea = start; ea < end && ea != BADADDR; ea = FindCode(ea, SEARCH_DOWN|SEARCH_NEXT)) {
-        n = skip_junk(ea, 0, 1);
+        n = skip_junk(ea, Byte(ea) == 0x90 ? 1: 0, 1);
         total = total + n;
         if (n > 0) {
             Message("merge_jumps ea: %x\n", ea);
