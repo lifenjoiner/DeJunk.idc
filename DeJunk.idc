@@ -321,8 +321,7 @@ static ReAnalyzeArea(start, end)
     AnalyzeArea(MinEA(), MaxEA());
 }
 
-//static de_junk(long start, long end, string junk_sig, long len_sig, long len_operand);
-static de_junk(start, end, junk_sig, len_sig, len_operand)
+static de_junk(start, end, junk_sig, len_sig, len_operand, tail, len_tail)
 {
     auto ea, ea_x;
     auto n, i;
@@ -345,12 +344,15 @@ static de_junk(start, end, junk_sig, len_sig, len_operand)
         //Message("jmp-len: %d\n", n);
         if (n <= 0) continue;
         // n < 0 ? haven't seen this type.
+        //
+        if (len_tail > 0 && ea + len_sig + len_operand + n != FindBinary(ea + len_sig + len_operand, SEARCH_DOWN, tail)) continue;
         // are ALL data? dynamic (x + y * i) jump?
         // data and code not in a function chunk
         // some junk data would be left as code
         //
         auto flags = 0, found_real_code = 0;
-        i = len_sig + len_operand + n;
+        i = len_sig + len_operand + len_tail + n;
+        ea_x = ea_x + len_operand + len_tail - 1;
         if (is_call(ea)) flags = 0x00008000;
         while (ea_x = FindCode(ea_x, SEARCH_DOWN|SEARCH_NEXT), ea_x < ea + i) {
             // further determination on the junk data that can be treated as code
@@ -473,17 +475,17 @@ Dst:
 // MUST be junk code and no data!
 static de_junks(start, end)
 {
-    de_junk(start, end, "F2 EB",    2, 1);
-    de_junk(start, end, "F3 EB",    2, 1);
-    de_junk(start, end, "EB",       1, 1);
+    de_junk(start, end, "F2 EB",    2, 1, "", 0);
+    de_junk(start, end, "F3 EB",    2, 1, "", 0);
+    de_junk(start, end, "EB",       1, 1, "", 0);
+    // call xxx, 'lea     esp, [esp+4]'
+    de_junk(start, end, "F2 E8",    2, 4, "8D 64 24 04", 4);
+    de_junk(start, end, "F3 E8",    2, 4, "8D 64 24 04", 4);
+    de_junk(start, end, "E8",       1, 4, "8D 64 24 04", 4);
     //
-    de_junk(start, end, "F2 E8",    2, 4);
-    de_junk(start, end, "F3 E8",    2, 4);
-    de_junk(start, end, "E8",       1, 4);
-    //
-    de_junk(start, end, "F8 73",    2, 1);
-    de_junk(start, end, "F9 72",    2, 1);
-    de_junk(start, end, "31 C9 E3", 3, 1);
+    de_junk(start, end, "F8 73",    2, 1, "", 0);
+    de_junk(start, end, "F9 72",    2, 1, "", 0);
+    de_junk(start, end, "31 C9 E3", 3, 1, "", 0);
     //
 }
 
@@ -524,7 +526,6 @@ static DeJunks(start, end)
     total_merges = merge_jumps(start, end);
     if (total_junks || total_merges) {
         ReAnalyzeArea(junks_start_ea, junks_end_ea);
-        Refresh();
     }
     //
     Message("junks range [0x%x, 0x%x]\n", junks_start_ea, junks_end_ea);
@@ -539,5 +540,5 @@ static main(void)
     junks_end_ea = MinEA();
     DeJunks(MinEA(), MaxEA());
     Message("Command available: DeJunks(MinEA(), MaxEA());\n");
-    Message("Command available: ReAnalyzeArea(MinEA(), MaxEA());\n");
+    Message("Command available: ReAnalyzeArea(junks_start_ea, junks_end_ea);\n");
 }
