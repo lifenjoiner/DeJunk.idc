@@ -148,6 +148,7 @@ static patch_byte_operand(ea, op_len, opnd_change, flowtype) {
         PatchByte(cur_x, opnd);
         DelCodeXref(ea, cur_x + 1 + opnd_old, 0);
         AddCodeXref(ea, cur_x + 1 + opnd, XREF_USER | flowtype);
+        //Message("Patch: ea = %#x, old = %#x, new = %#x\n", ea, cur_x + 1 + opnd_old, cur_x + 1 + opnd);
     }
     return opnd;
 }
@@ -164,6 +165,7 @@ static patch_dword_operand(ea, op_len, opnd_change, flowtype) {
         PatchDword(cur_x, opnd);
         DelCodeXref(ea, cur_x + 4 + opnd_old, 0);
         AddCodeXref(ea, cur_x + 4 + opnd, XREF_USER | flowtype);
+        //Message("Patch: ea = %#x, old = %#x, new = %#x\n", ea, cur_x + 4 + opnd_old, cur_x + 4 + opnd);
     }
     return opnd;
 }
@@ -171,6 +173,7 @@ static patch_dword_operand(ea, op_len, opnd_change, flowtype) {
 static nop_bytes(ea, len) {
     auto i;
     for (i = 0; i < len; i++) PatchByte(ea + i, 0x90);
+    for (i = 0; i < len; i++) MakeCode(ea + i);
 }
 
 static is_not_xref_block(ea) {
@@ -195,9 +198,10 @@ static is_not_xref_block(ea) {
 */
 static fix_opnd_rva(start, opnd_change, recur) {
     auto cur, t, op, cur_x, n, opnd_old, opnd;
-    auto retn, counter;
+    auto retn, counter, changed;
     retn = 0;
     counter = 0;
+    changed = 0;
     n = 0;
     for (cur = RfirstB0(start); cur != BADADDR; cur = RnextB0(start, cur)) {
         t = XrefType();
@@ -209,6 +213,7 @@ static fix_opnd_rva(start, opnd_change, recur) {
             cur_x++;
         }
         //
+        counter++;
         n = 0;
         //
         if (t == fl_CN) {
@@ -257,16 +262,18 @@ static fix_opnd_rva(start, opnd_change, recur) {
             // shouldn't happen
         }
         //
-        counter++;
-        if (opnd_change != 0 && n != 0) retn++;
+        if (opnd_change != 0 && n != 0) changed++;
     }
     // the ones in middle: all jump to this are updated?
-    if (recur && opnd_change && counter && counter == retn) {
+    if (recur && opnd_change && counter && counter == changed) {
         //
         n = 0;
         opnd = 0;
-        //
-        if (is_not_xref_block(start)) {
+        // nop
+        if (Byte(start) == 0x90) {
+            // accelerate
+        }
+        else if (is_not_xref_block(start)) {
             op = Byte(cur);
             cur_x = start;
             if (op == 0xF2 || op == 0xF3) {
@@ -282,26 +289,32 @@ static fix_opnd_rva(start, opnd_change, recur) {
                 n = cur_x - start + n + 4;
             }
         }
-        // nop
         //
         if (n > 0) nop_bytes(start, n);
-        DelCodeXref(start, start + n + opnd, 0);
+        if (n + opnd != 0) DelCodeXref(start, start + n + opnd, 0);
         MakeName(start, "");
     }
     //
-    return retn;
+    return retn + changed;
 }
 
 static merge_jumps(start, end) {
-    auto ea, n, total;
+    auto ea, cur, n, total;
     total = 0;
     for (ea = start; ea < end && ea != BADADDR; ea = FindCode(ea, SEARCH_DOWN|SEARCH_NEXT)) {
-        n = fix_opnd_rva(ea, Byte(ea) == 0x90 ? 1: 0, 1);
+        cur = ea;
+        while (ea < end && Byte(ea) == 0x90) {ea++;}
+        n = fix_opnd_rva(cur, ea - cur, 1);
+        //
+        if (ea > cur) ea--;
         total = total + n;
         if (n > 0) {
+            // better ideas?
+            Jump(ea);
+            //
             Message("merge_jumps ea: %#x\n", ea);
             if (junks_end_ea < ea) junks_end_ea = ea;
-            if (junks_start_ea > ea) junks_start_ea = ea;
+            if (junks_start_ea > cur) junks_start_ea = cur;
         }
     }
     return total;
@@ -310,7 +323,7 @@ static merge_jumps(start, end) {
 static skip_mid_nop(start, end) {
     auto ea, cur;
     auto nop_start, jump_start;
-    auto n, op, opnd;
+    auto n, op, opnd_old, opnd, len_code_old, len_opnd_old, len_opnd;
     auto counter;
     //
     counter = 0;
@@ -329,38 +342,64 @@ static skip_mid_nop(start, end) {
         if (op == 0xF2 || op == 0xF3) {
             ea++;
         }
-        opnd = 0;
+        opnd_old = 0;
         if (n = is_short_jump(ea)) {
             ea = ea + n;
-            opnd = Byte(ea);
-            if (opnd > 0x7F) opnd = opnd | 0xFFFFFF00;
+            opnd_old = Byte(ea);
+            if (opnd_old > 0x7F) opnd_old = opnd_old | 0xFFFFFF00;
             ea = ea + 1;
         }
         else if (n = is_near_jump(ea)) {
             ea = ea + n;
-            opnd = Dword(ea);
+            opnd_old = Dword(ea);
             ea = ea + 4;
         }
         //
-        if (opnd == 0) continue;
+        if (opnd_old == 0) continue;
         //
+        len_code_old = ea - cur;
+        len_opnd_old = ea - cur - n;
+        opnd = opnd_old;
         jump_start = cur;
+        // merge dest nops
+        cur = ea + opnd_old;
+        while (cur < end && Byte(cur) == 0x90) {cur++;}
+        n = cur - ea - opnd_old;
+        if (n > 0) {
+            Message("nop blocks ea (to): %#x, len: %#d\n", ea + opnd_old, n);
+            opnd = opnd_old + n;
+        }
+        //
         n = jump_start - nop_start;
         Message("nop blocks ea: %#x, len: %#d\n", nop_start, n);
         opnd = opnd + n;
         //
         if (0x7FFFFFFF < opnd || opnd < -0x7FFFFFFF) continue;
-        //
-        if (-0x80 < opnd && opnd < 0x80) {
-            cur = nop_start + 2;
-            PatchByte(nop_start, 0xEB);
-            PatchByte(nop_start + 1, opnd);
+        // get more space
+        while (ea++, ea < end && Byte(ea) == 0x90 && FindCode(ea, SEARCH_DOWN) == ea && RfirstB0(ea) == BADADDR) {}
+        if (RfirstB0(ea) != BADADDR) {
+            ea--;
         }
-        else {
+        //
+        if (nop_start + 5 <= ea) {
             cur = nop_start + 5;
             if (cur > ea) continue;
             PatchByte(nop_start, 0xE9);
+            if (len_opnd_old == 1) {
+                opnd = opnd - 3;
+            }
             PatchDword(nop_start + 1, opnd);
+            len_opnd = 4;
+        }
+        else if (-0x80 < opnd && opnd < 0x80) {
+            cur = nop_start + 2;
+            PatchByte(nop_start, 0xEB);
+            PatchByte(nop_start + 1, opnd);
+            len_opnd = 1;
+        }
+        else {
+            // overflow short opnd
+            continue;
         }
         //
         if (jump_start >= cur) PatchByte(jump_start, 0x90);
@@ -368,10 +407,9 @@ static skip_mid_nop(start, end) {
         nop_bytes(cur, ea - cur);
         counter++;
         //
-        fix_opnd_rva(jump_start, -n, 0);
-        //
-        DelCodeXref(jump_start, ea - n + opnd, 0);
-        AddCodeXref(nop_start, ea - n + opnd, XREF_USER | fl_JN);
+        DelCodeXref(jump_start, jump_start + len_code_old + opnd_old, 0);
+        AddCodeXref(nop_start, nop_start + 1 + len_opnd + opnd, XREF_USER | fl_JN);
+        //Message("Patch: %#x, %#x -> %#x, %#x\n", jump_start, jump_start + len_code_old + opnd_old, nop_start, nop_start + 1 + len_opnd + opnd);
     }
     return counter;
 }
@@ -462,8 +500,6 @@ static de_junk(start, end, junk_sig, len_sig, len_operand, tail, len_tail)
         total_junks++;
         //
         nop_bytes(ea, n);
-        DelCodeXref(ea, ea + n, 0);
-        MakeName(ea + n, "");
         //
         fix_opnd_rva(ea, n, 0);
         //
