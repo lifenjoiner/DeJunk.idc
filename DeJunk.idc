@@ -310,7 +310,7 @@ static merge_jumps(start, end) {
         total = total + n;
         if (n > 0) {
             // better ideas?
-            Jump(ea);
+            if (ea > cur) Jump(ea);
             //
             Message("merge_jumps ea: %#x\n", ea);
             if (junks_end_ea < ea) junks_end_ea = ea;
