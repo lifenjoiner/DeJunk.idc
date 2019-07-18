@@ -263,7 +263,10 @@ static fix_opnd_rva(start, opnd_change, recur) {
         }
         //
         if (opnd_change != 0 && n != 0) changed++;
+        // patch stage: nopped xref-from without xref-to
+        else if (!recur && op == 0x90 && RfirstB0(cur) == BADADDR) DelCodeXref(cur, start, 0);
     }
+    // merge jumps state
     // the ones in middle: all jump to this are updated?
     if (recur && opnd_change && counter && counter == changed) {
         //
@@ -274,7 +277,7 @@ static fix_opnd_rva(start, opnd_change, recur) {
             // accelerate
         }
         else if (is_not_xref_block(start)) {
-            op = Byte(cur);
+            op = Byte(start);
             cur_x = start;
             if (op == 0xF2 || op == 0xF3) {
                 cur_x++;
@@ -644,6 +647,8 @@ static DeJunks(start, end)
     Message("total junks removed [%#x, %#x]: %d\n", start, end, total_junks);
     Message("total jumps merged [%#x, %#x]: %d\n", start, end, total_merges);
     Message("total nop blocks skipped [%#x, %#x]: %d\n", start, end, total_nop_blocks);
+    Message("Command available: DeJunks(MinEA(), MaxEA());\n");
+    Message("Command available: ReAnalyzeArea(junks_start_ea, junks_end_ea);\n");
     Message("Finished!\n");
 }
 
@@ -652,6 +657,4 @@ static main(void)
     junks_start_ea = MaxEA();
     junks_end_ea = MinEA();
     DeJunks(MinEA(), MaxEA());
-    Message("Command available: DeJunks(MinEA(), MaxEA());\n");
-    Message("Command available: ReAnalyzeArea(junks_start_ea, junks_end_ea);\n");
 }
