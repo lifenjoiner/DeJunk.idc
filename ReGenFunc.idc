@@ -275,7 +275,8 @@ static concat_next_code(cur, code_start, code_end, p_code_param, data_start, dat
     }
     if (cur < code_start || cur >= code_end) {
         Message("concat_next_code: code ea out of boundaries [%#x, %#x) <-x- %#x\n", code_start, code_end, cur);
-        return -1;
+        // special end: call ExitProcess, jmp OEP?
+        return p_code_param;
     }
     //
     if (Byte(cur) == 0x90 && has_next_nbr_code(cur)) { // in case
