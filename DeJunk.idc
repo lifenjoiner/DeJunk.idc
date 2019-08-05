@@ -62,8 +62,8 @@ static nop_bytes(ea, len) {
     auto i, end;
     end = ea + len;
     for (i = ea; i < end; i++) {
-        DelCodeXref(i, Rfirst0(i), 0);
-        MakeUnkn(i, DOUNK_DELNAMES);
+        if (i > ea) DelCodeXref(i, Rfirst0(i), 0);
+        MakeName(i, "");
         PatchByte(i, 0x90);
         MakeCode(i);
     }
