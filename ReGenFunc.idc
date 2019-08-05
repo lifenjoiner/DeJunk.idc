@@ -279,6 +279,9 @@ static concat_next_code(cur, code_start, code_end, p_code_param, data_start, dat
     }
     //
     if (Byte(cur) == 0x90 && has_next_nbr_code(cur)) { // in case
+        if (p_code_param_jump) { // update jxc operand
+            code_param_write_operand(p_code_param_jump, code_param_read_operand(p_code_param_jump) + 1);
+        }
         return concat_next_code(cur + 1, code_start, code_end, p_code_param, data_start, data_end, p_code_param_jump);
     }
     //
