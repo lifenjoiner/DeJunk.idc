@@ -171,9 +171,14 @@ static patch_dword_operand(ea, op_len, opnd_change, flowtype) {
 }
 
 static nop_bytes(ea, len) {
-    auto i;
-    for (i = 0; i < len; i++) PatchByte(ea + i, 0x90);
-    for (i = 0; i < len; i++) MakeCode(ea + i);
+    auto i, end;
+    end = ea + len;
+    for (i = ea; i < end; i++) {
+        DelCodeXref(i, Rfirst0(i), 0);
+        MakeUnkn(i, DOUNK_DELNAMES);
+        PatchByte(i, 0x90);
+        MakeCode(i);
+    }
 }
 
 static is_not_xref_block(ea) {
@@ -447,6 +452,7 @@ static de_junk(start, end, junk_sig, len_sig, len_operand, tail, len_tail)
         //Message("Sig-ea: %#x\n", ea);
         // GetOperandValue(ea, 0): -1
         ea_x = ea + len_sig;
+        n = 0;
         if (len_operand == 1) {
             n = Byte(ea_x);
             if (n > 0x7F) n = n | 0xFFFFFF00;
@@ -454,7 +460,7 @@ static de_junk(start, end, junk_sig, len_sig, len_operand, tail, len_tail)
             n = Dword(ea_x);
         }
         //Message("jmp-len: %d\n", n);
-        if (n <= 0) continue;
+        if (n < 0) continue;
         // n < 0 ? haven't seen this type.
         //
         if (len_tail > 0 && ea + len_sig + len_operand + n != FindBinary(ea + len_sig + len_operand, SEARCH_DOWN, tail)) continue;
@@ -554,28 +560,46 @@ leading 0xF2/0xF3: REPxx
 */
 
 /*  special conditional jump
+//////
+F873
+
     CLC
     JNB     Dst
     db      Junks
 Dst:
-F873
+
+//////
+F972
 
     STC
     JB      Dst
     db      Junks
 Dst:
-F972
+
+//////
+31 C9 E3
 
 ;		push	ecx
 ;		xor		ecx,ecx
 ;		jcxz	label
 ;		db		_junkcode
 ;label:	pop		ecx
-31 C9 E3
 
 */
 
 /*  2 jumps: true or false with the same dst:
+//////
+7C 03 EB 03 ?? 74 FB
+
+seg000:00401D3C 7C 03                             jl      short loc_401D41
+seg000:00401D3E EB 1E                             jmp     short loc_401D5E
+seg000:00401D40                   ; ---------------------------------------------------------------------------
+seg000:00401D40 A5                                movsd
+seg000:00401D41
+seg000:00401D41                   loc_401D41:                             ; CODE XREF: seg000:loc_401D3C j
+seg000:00401D41 74 1B                             jz      short loc_401D5E
+
+//////
     J?      Dst
     Jn?     Dst
     db Junks
@@ -583,21 +607,28 @@ Dst:
 */
 
 //static de_junks(long start, long end);
-// MUST be junk code and no data!
+// MUST be junk code and not data!
 static de_junks(start, end)
 {
-    de_junk(start, end, "F2 EB",    2, 1, "", 0);
-    de_junk(start, end, "F3 EB",    2, 1, "", 0);
-    de_junk(start, end, "EB",       1, 1, "", 0);
-    // call xxx, 'lea     esp, [esp+4]'
+    //
+    // block type first, isn't changed by the simple types
+    de_junk(start, end, "7C 03 EB 03 ?? 74 FB", 7, 0, "", 0);
+    //
+    // call xxx, 'lea esp, [esp+4]'
     de_junk(start, end, "F2 E8",    2, 4, "8D 64 24 04", 4);
     de_junk(start, end, "F3 E8",    2, 4, "8D 64 24 04", 4);
     de_junk(start, end, "E8",       1, 4, "8D 64 24 04", 4);
+    //
+    de_junk(start, end, "F2 EB",    2, 1, "", 0);
+    de_junk(start, end, "F3 EB",    2, 1, "", 0);
+    de_junk(start, end, "EB",       1, 1, "", 0);
     //
     de_junk(start, end, "F8 73",    2, 1, "", 0);
     de_junk(start, end, "F9 72",    2, 1, "", 0);
     de_junk(start, end, "31 C9 E3", 3, 1, "", 0);
     //
+    // sal eax, 0
+    de_junk(start, end, "C1 F0 00", 3, 0, "", 0);
 }
 
 
