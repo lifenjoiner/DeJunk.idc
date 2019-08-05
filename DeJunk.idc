@@ -9,6 +9,7 @@
 */
 
 #include <idc.idc>
+#include "opr.idc"
 
 #ifdef __EA64__
 
@@ -22,125 +23,12 @@ extern total_junks;
 extern junks_start_ea;
 extern junks_end_ea;
 
-// return op length
-
-static is_FF_r(ea, ro) {
-    auto op = Byte(ea);
-    if ( op == 0xFF && Byte(ea + 1) >> 3 & 7 == ro ) {
-        return 2;
-    } else {
-        return 0;
-    }
-}
-
-static is_short_jump(ea) {
-    auto op = Byte(ea);
-    if ( op == 0xEB ) {
-        return 1;
-    } else {
-        return 0;
-    }
-}
-
-static is_short_jxc(ea) {
-    auto op = Byte(ea);
-    if ( (0x70 <= op && op <= 0x7F) || op == 0xE3 ) {
-        return 1;
-    } else {
-        return 0;
-    }
-}
-
-static is_near_jump(ea) {
-    auto op = Byte(ea);
-    auto n = 1;
-    if ( op == 0xE9 ) {
-        return n;
-    } else {
-        return 0;
-    }
-}
-
-static is_near_jxc(ea) {
-    auto op = Byte(ea);
-    auto n = 1;
-    if (op == 0x0F) {
-        op = op * 256 + Byte(ea + 1);
-        n = 2;
-    }
-    if ( 0x0F80 <= op && op <= 0x0F8F ) {
-        return n;
-    } else {
-        return 0;
-    }
-}
-
-static is_near_jump_r(ea) {
-    return is_FF_r(ea, 4);
-}
-
-static is_far_jump(ea) {
-    auto op = Byte(ea);
-    if (op == 0xEA) {
-        return 1;
-    } else {
-        return 0;
-    }
-}
-
-static is_far_jump_r(ea) {
-    return is_FF_r(ea, 5);
-}
-
-static is_jump(ea) {
-    return is_short_jump(ea) || is_short_jxc(ea) || is_near_jump(ea) || is_near_jxc(ea) || is_near_jump_r(ea) || is_far_jump(ea) || is_far_jump_r(ea);
-}
-
-static is_near_call(ea) {
-    auto op = Byte(ea);
-    if (op == 0xE8) {
-        return 1;
-    } else {
-        return 0;
-    }
-}
-
-static is_near_call_r(ea) {
-    return is_FF_r(ea, 2);
-}
-
-static is_far_call(ea) {
-    auto op = Byte(ea);
-    if (op == 0x9A) {
-        return 1;
-    } else {
-        return 0;
-    }
-}
-
-static is_far_call_r(ea) {
-    return is_FF_r(ea, 3);
-}
-
-static is_call(ea) {
-    return is_near_call(ea) || is_near_call_r(ea) || is_far_call(ea) || is_far_call_r(ea);
-}
-
-static is_retn(ea) {
-    auto op = Byte(ea);
-    if (op == 0xC3 || op == 0xCB || op == 0xC2 || op == 0xCA || op == 0xCF) {
-        return 1;
-    } else {
-        return 0;
-    }
-}
 
 static patch_byte_operand(ea, op_len, opnd_change, flowtype) {
     auto cur_x, opnd_old, opnd;
 
     cur_x = ea + op_len;
-    opnd_old = Byte(cur_x);
-    if (opnd_old > 0x7F) opnd_old = opnd_old | 0xFFFFFF00;
+    opnd_old = read_byte_opnd(cur_x);
     opnd = opnd_old + opnd_change;
     // overflow?
     if (opnd > 0x7F || opnd < -0x7F) return 0;
@@ -288,8 +176,7 @@ static fix_opnd_rva(start, opnd_change, recur) {
                 cur_x++;
             }
             if (n = is_short_jump(cur_x)) {
-                opnd = Byte(cur_x + n);
-                if (opnd > 0x7F) opnd = opnd | 0xFFFFFF00;
+                opnd = read_byte_opnd(cur_x + n);
                 n = cur_x - start + n + 1;
             }
             else if (n = is_near_jump(cur_x)) {
@@ -353,8 +240,7 @@ static skip_mid_nop(start, end) {
         opnd_old = 0;
         if (n = is_short_jump(ea)) {
             ea = ea + n;
-            opnd_old = Byte(ea);
-            if (opnd_old > 0x7F) opnd_old = opnd_old | 0xFFFFFF00;
+            opnd_old = read_byte_opnd(ea);
             ea = ea + 1;
         }
         else if (n = is_near_jump(ea)) {
@@ -454,8 +340,7 @@ static de_junk(start, end, junk_sig, len_sig, len_operand, tail, len_tail)
         ea_x = ea + len_sig;
         n = 0;
         if (len_operand == 1) {
-            n = Byte(ea_x);
-            if (n > 0x7F) n = n | 0xFFFFFF00;
+            n = read_byte_opnd(ea_x);
         } else if (len_operand == 4) {
             n = Dword(ea_x);
         }
