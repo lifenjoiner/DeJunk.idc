@@ -118,7 +118,7 @@ static fix_opnd_rva(start, opnd_change, recur) {
                 n = n + 4;
             }
         } else if (t == fl_JN) {
-            if ( n = is_short_jump(cur_x) ) {
+            if ( n = is_short_jmp(cur_x) ) {
                 n = n + cur_x - cur;
                 opnd = patch_byte_operand(cur, n, opnd_change, t);
                 if ( !opnd ) continue;
@@ -134,7 +134,7 @@ static fix_opnd_rva(start, opnd_change, recur) {
                 if ( !opnd ) continue;
                 //Message("dest: %#x, %#x\n", cur, cur_x + 1 + opnd);
                 n = n + 1;
-            } else if ( n = is_near_jump(cur_x) ) {
+            } else if ( n = is_near_jmp(cur_x) ) {
                 n = n + cur_x - cur;
                 opnd = patch_dword_operand(cur, n, opnd_change, t);
                 if ( !opnd ) continue;
@@ -175,11 +175,11 @@ static fix_opnd_rva(start, opnd_change, recur) {
             if (op == 0xF2 || op == 0xF3) {
                 cur_x++;
             }
-            if (n = is_short_jump(cur_x)) {
+            if (n = is_short_jmp(cur_x)) {
                 opnd = read_byte_opnd(cur_x + n);
                 n = cur_x - start + n + 1;
             }
-            else if (n = is_near_jump(cur_x)) {
+            else if (n = is_near_jmp(cur_x)) {
                 opnd = Dword(cur_x + n);
                 n = cur_x - start + n + 4;
             }
@@ -238,12 +238,12 @@ static skip_mid_nop(start, end) {
             ea++;
         }
         opnd_old = 0;
-        if (n = is_short_jump(ea)) {
+        if (n = is_short_jmp(ea)) {
             ea = ea + n;
             opnd_old = read_byte_opnd(ea);
             ea = ea + 1;
         }
-        else if (n = is_near_jump(ea)) {
+        else if (n = is_near_jmp(ea)) {
             ea = ea + n;
             opnd_old = Dword(ea);
             ea = ea + 4;
