@@ -18,11 +18,6 @@
 // won't be that long
 #define JUNK_DATA_LEN 0x7F
 
-extern total_junks;
-
-extern junks_start_ea;
-extern junks_end_ea;
-
 
 static patch_byte_operand(ea, op_len, opnd_change, flowtype) {
     auto cur_x, opnd_old, opnd;
@@ -59,29 +54,17 @@ static patch_dword_operand(ea, op_len, opnd_change, flowtype) {
 }
 
 static nop_bytes(ea, len) {
-    auto i, end;
-    end = ea + len;
-    for (i = ea; i < end; i++) {
-        if (i > ea) DelCodeXref(i, Rfirst0(i), 0);
-        MakeName(i, "");
-        PatchByte(i, 0x90);
-        MakeCode(i);
-    }
+    auto i;
+    for (i = ea + len - 1; i >= ea; i--) PatchByte(i, 0x90);
 }
 
 static is_not_xref_block(ea) {
     auto cur;
-    cur = ea;
     // all previous codes have NO xref to
-    while ( (cur = RfirstB(cur)) != BADADDR) {
-        if (FindData(cur, SEARCH_DOWN) > FindCode(cur, SEARCH_DOWN)) {
-            if (RfirstB0(cur) != BADADDR) return 0;
-        }
-        else {
-            return 0;
-        }
+    while (cur = RfirstB(ea), has_prev_nobreak_code(ea) && RfirstB0(ea) == BADADDR) {
+        ea = cur;
     }
-    return 1;
+    return cur == BADADDR;
 }
 
 /*  skip useless code to reduce the code size
@@ -89,13 +72,14 @@ static is_not_xref_block(ea) {
     So, we get the codes slimmed.
     Far jmp/call shouldn't be in this case, leave it.
 */
-static fix_opnd_rva(start, opnd_change, recur) {
+static fix_opnd_rva(start, opnd_change) {
     auto cur, t, op, cur_x, n, opnd_old, opnd;
     auto retn, counter, changed;
     retn = 0;
     counter = 0;
     changed = 0;
     n = 0;
+    //
     for (cur = RfirstB0(start); cur != BADADDR; cur = RnextB0(start, cur)) {
         t = XrefType();
         //Message("xref, type: %#x, %d\n", cur, t);
@@ -125,8 +109,8 @@ static fix_opnd_rva(start, opnd_change, recur) {
                 //Message("dest: %#x, %#x\n", cur, cur_x + 1 + opnd);
                 // merge jumps
                 n = n + 1;
-                if (recur && n != -opnd) {
-                    retn = retn + fix_opnd_rva(cur, n + opnd, recur);
+                if (n != -opnd) {
+                    retn = retn + fix_opnd_rva(cur, n + opnd);
                 }
             } else if ( n = is_short_jxc(cur_x) ) {
                 n = n + cur_x - cur;
@@ -141,8 +125,8 @@ static fix_opnd_rva(start, opnd_change, recur) {
                 //Message("dest: %#x, %#x\n", cur, cur_x + 4 + opnd);
                 // merge jumps
                 n = n + 4;
-                if (recur && n != -opnd) {
-                    retn = retn + fix_opnd_rva(cur, n + opnd, recur);
+                if (n != -opnd) {
+                    retn = retn + fix_opnd_rva(cur, n + opnd);
                 }
             } else if ( n = is_near_jxc(cur_x) ) {
                 n = n + cur_x - cur;
@@ -156,12 +140,12 @@ static fix_opnd_rva(start, opnd_change, recur) {
         }
         //
         if (opnd_change != 0 && n != 0) changed++;
-        // patch stage: nopped xref-from without xref-to
-        else if (!recur && op == 0x90 && RfirstB0(cur) == BADADDR) DelCodeXref(cur, start, 0);
+        // nopped xref-from without xref-to
+        if (op == 0x90 && RfirstB0(cur) == BADADDR) DelCodeXref(cur, start, 0);
     }
     // merge jumps state
     // the ones in middle: all jump to this are updated?
-    if (recur && opnd_change && counter && counter == changed) {
+    if (opnd_change && counter && counter == changed) {
         //
         n = 0;
         opnd = 0;
@@ -195,23 +179,22 @@ static fix_opnd_rva(start, opnd_change, recur) {
 
 static merge_jumps(start, end) {
     auto ea, cur, n, total;
+    //
+    Message("merge_jumps\n");
+    //
     total = 0;
     for (ea = start; ea < end && ea != BADADDR; ea = FindCode(ea, SEARCH_DOWN|SEARCH_NEXT)) {
         cur = ea;
-        while (ea < end && Byte(ea) == 0x90) {ea++;}
-        n = fix_opnd_rva(cur, ea - cur, 1);
-        //
-        if (ea > cur) ea--;
-        total = total + n;
-        if (n > 0) {
-            // better ideas?
-            if (ea > cur) Jump(ea);
-            //
-            Message("merge_jumps ea: %#x\n", ea);
-            if (junks_end_ea < ea) junks_end_ea = ea;
-            if (junks_start_ea > cur) junks_start_ea = cur;
+        while (ea < end && Byte(ea) == 0x90) {
+            ea++;
+            if (RfirstB0(ea) != BADADDR) break;
         }
+        n = fix_opnd_rva(cur, ea - cur);
+        //
+        if (ea > cur) ea--; // SEARCH_NEXT
+        total = total + n;
     }
+    Message("total: %d\n", total);
     return total;
 }
 
@@ -219,9 +202,11 @@ static skip_mid_nop(start, end) {
     auto ea, cur;
     auto nop_start, jump_start;
     auto n, op, opnd_old, opnd, len_code_old, len_opnd_old, len_opnd;
-    auto counter;
+    auto total;
     //
-    counter = 0;
+    Message("skip_mid_nop\n");
+    //
+    total = 0;
     ea = start - 1;
     while (ea = FindCode(ea, SEARCH_DOWN|SEARCH_NEXT), ea != BADADDR && ea < end) {
         if (Byte(ea) != 0x90) continue;
@@ -260,19 +245,22 @@ static skip_mid_nop(start, end) {
         while (cur < end && Byte(cur) == 0x90) {cur++;}
         n = cur - ea - opnd_old;
         if (n > 0) {
-            Message("nop blocks ea (to): %#x, len: %#d\n", ea + opnd_old, n);
+            //Message("nop blocks ea (to): %#x, len: %#d\n", ea + opnd_old, n);
             opnd = opnd_old + n;
         }
         //
         n = jump_start - nop_start;
-        Message("nop blocks ea: %#x, len: %#d\n", nop_start, n);
+        //Message("nop blocks ea: %#x, len: %#d\n", nop_start, n);
         opnd = opnd + n;
         //
         if (0x7FFFFFFF < opnd || opnd < -0x7FFFFFFF) continue;
         // get more space
-        while (ea++, ea < end && Byte(ea) == 0x90 && FindCode(ea, SEARCH_DOWN) == ea && RfirstB0(ea) == BADADDR) {}
-        if (RfirstB0(ea) != BADADDR) {
-            ea--;
+        while (ea < end && Byte(ea) == 0x90) {
+            ea++;
+            if (RfirstB0(ea) != BADADDR) {
+                ea--;
+                break;
+            }
         }
         //
         if (nop_start + 5 <= ea) {
@@ -299,37 +287,39 @@ static skip_mid_nop(start, end) {
         if (jump_start >= cur) PatchByte(jump_start, 0x90);
         if (jump_start + 1 > cur) cur = jump_start + 1;
         nop_bytes(cur, ea - cur);
-        counter++;
+        total++;
         //
         DelCodeXref(jump_start, jump_start + len_code_old + opnd_old, 0);
         AddCodeXref(nop_start, nop_start + 1 + len_opnd + opnd, XREF_USER | fl_JN);
         //Message("Patch: %#x, %#x -> %#x, %#x\n", jump_start, jump_start + len_code_old + opnd_old, nop_start, nop_start + 1 + len_opnd + opnd);
     }
-    return counter;
+    //
+    Message("total: %d\n", total);
+    return total;
 }
 
-// topological merging?
-
-
-static ReAnalyzeArea(start, end)
-{
-    auto ea, ea_start;
-    for (ea = end; ea > start; ) {
-        ea_start = PrevFchunk(ea);
-        if (ea_start == BADADDR || ea < start) break;
-        RemoveFchunk(ea_start, ea_start);
-        DelFunction(ea_start);
-        ea = ea_start;
+static cancel_junk_block_attr(from, to) {
+    auto ea;
+    if (GetFchunkAttr(from, FUNCATTR_START) != GetFchunkAttr(to, FUNCATTR_START)) {
+        if (GetFchunkAttr(from, FUNCATTR_START) == from || GetFchunkAttr(from, FUNCATTR_END) == to) {
+            RemoveFchunk(from, from);
+        }
+        RemoveFchunk(to, to);
+        DelFunction(to);
     }
-    AnalyzeArea(MinEA(), MaxEA());
+    //
+    ea = RfirstB0(to);
+    if (from <= ea && ea < to) DelCodeXref(ea, to, 0);
 }
 
 static de_junk(start, end, junk_sig, len_sig, len_operand, tail, len_tail)
 {
-    auto ea, ea_x;
+    auto ea, ea_x, total;
     auto n, i;
     //strlen
-    //Message("start, end, junk_sig: %#x, %#x, %s\n", start, end, junk_sig);
+    Message("de_junk: %s\n", junk_sig);
+    //
+    total = 0;
     ea = start - 1;
     while (ea = FindBinary(ea, SEARCH_DOWN|SEARCH_NEXT, junk_sig), ea != BADADDR && ea < end) {
         // don't break parsed code
@@ -348,35 +338,36 @@ static de_junk(start, end, junk_sig, len_sig, len_operand, tail, len_tail)
         if (n < 0) continue;
         // n < 0 ? haven't seen this type.
         //
-        if (len_tail > 0 && ea + len_sig + len_operand + n != FindBinary(ea + len_sig + len_operand, SEARCH_DOWN, tail)) continue;
+        ea_x = ea_x + len_operand;
+        if (len_tail > 0 && ea_x + n != FindBinary(ea_x, SEARCH_DOWN, tail)) continue;
         // are ALL data? dynamic (x + y * i) jump?
-        // data and code not in a function chunk
+        // data and code never will be executed
         // some junk data would be left as code
         //
         auto flags = 0, found_real_code = 0;
-        i = len_sig + len_operand + len_tail + n;
-        ea_x = ea_x + len_operand + len_tail - 1;
-        if (is_call(ea)) flags = 0x00008000;
+        i = len_sig + len_operand + n + len_tail;
+        ea_x = ea_x + len_tail - 1;
+        if (is_call(ea)) flags = 0x8000;
         while (ea_x = FindCode(ea_x, SEARCH_DOWN|SEARCH_NEXT), ea_x < ea + i) {
             // further determination on the junk data that can be treated as code
             if (RfirstB0(ea_x) != BADADDR) {
-                flags = flags + 0x01000000;
+                flags = flags + 0x1000000;
             }
             else if (is_retn(ea_x)) {
-                if (flags & 0x00008000 == 0x00008000) {
-                    flags = flags + 0x00100000;
+                if (flags & 0x8000 == 0x8000) {
+                    flags = flags + 0x100000;
                 }
                 else {
-                    flags = flags + 0x00010000;
+                    flags = flags + 0x10000;
                 }
             }
             else if (is_call(ea_x) || is_jump(ea_x)) {
-                flags = flags + 0x00010000;
+                flags = flags + 0x10000;
             }
-            else if ( Byte(ea_x) == 0x90 ) {
+            else if (Byte(ea_x) == 0x90) {
                 // ignore nop
             }
-            else if (GetFchunkAttr(ea_x, FUNCATTR_START) != BADADDR) {
+            else if (GetFchunkAttr(ea_x, FUNCATTR_START) != BADADDR) { // jmp over codes
                 flags = flags + 1;
             }
             // Not only 1 fake command?
@@ -387,19 +378,18 @@ static de_junk(start, end, junk_sig, len_sig, len_operand, tail, len_tail)
         }
         if (found_real_code > 0) continue;
         // too long may include real data
-        if (ea + i >= end && n > JUNK_DATA_LEN) continue;
+        if (ea + i > end || n > JUNK_DATA_LEN) continue;
         //
-        n = i;
-        Message("junk code ea: %#x len: %d\n", ea, n);
-        total_junks++;
+        //Message("junk code ea: %#x len: %d\n", ea, i);
+        total++;
         //
-        nop_bytes(ea, n);
+        nop_bytes(ea, i);
         //
-        fix_opnd_rva(ea, n, 0);
-        //
-        if (junks_end_ea < ea) junks_end_ea = ea;
-        if (junks_start_ea > ea) junks_start_ea = ea;
+        cancel_junk_block_attr(ea, ea + i);
     }
+    //
+    Message("total: %d\n", total);
+    return total;
 }
 
 /*  1 jump
@@ -495,27 +485,31 @@ Dst:
 // MUST be junk code and not data!
 static de_junks(start, end)
 {
+    auto total = 0;
     //
     // block type first, isn't changed by the simple types
-    de_junk(start, end, "7C 03 EB 03 ?? 74 FB", 7, 0, "", 0);
+    total = total + de_junk(start, end, "7C 03 EB 03 ?? 74 FB", 7, 0, "", 0);
     //
     // call xxx, 'lea esp, [esp+4]'
-    de_junk(start, end, "F2 E8",    2, 4, "8D 64 24 04", 4);
-    de_junk(start, end, "F3 E8",    2, 4, "8D 64 24 04", 4);
-    de_junk(start, end, "E8",       1, 4, "8D 64 24 04", 4);
+    total = total + de_junk(start, end, "F2 E8",    2, 4, "8D 64 24 04", 4);
+    total = total + de_junk(start, end, "F3 E8",    2, 4, "8D 64 24 04", 4);
+    total = total + de_junk(start, end, "E8",       1, 4, "8D 64 24 04", 4);
     //
-    de_junk(start, end, "F2 EB",    2, 1, "", 0);
-    de_junk(start, end, "F3 EB",    2, 1, "", 0);
-    de_junk(start, end, "EB",       1, 1, "", 0);
+    total = total + de_junk(start, end, "F2 EB",    2, 1, "", 0);
+    total = total + de_junk(start, end, "F3 EB",    2, 1, "", 0);
+    total = total + de_junk(start, end, "EB",       1, 1, "", 0);
     //
-    de_junk(start, end, "F8 73",    2, 1, "", 0);
-    de_junk(start, end, "F9 72",    2, 1, "", 0);
-    de_junk(start, end, "31 C9 E3", 3, 1, "", 0);
+    total = total + de_junk(start, end, "F8 73",    2, 1, "", 0);
+    total = total + de_junk(start, end, "F9 72",    2, 1, "", 0);
+    total = total + de_junk(start, end, "31 C9 E3", 3, 1, "", 0);
     //
     // sal eax, 0
-    de_junk(start, end, "C1 F0 00", 3, 0, "", 0);
+    total = total + de_junk(start, end, "C1 F0 00", 3, 0, "", 0);
+    // enter 0, 0
+    total = total + de_junk(start, end, "C8 00 00 00", 4, 0, "", 0);
+    //
+    return total;
 }
-
 
 /*
     What is juck code?
@@ -541,36 +535,47 @@ static de_junks(start, end)
 static DeJunks(start, end)
 {
     auto ea, ea_start;
-    auto total_merges;
-    auto total_nop_blocks;
+    auto total_junks, total_merges, total_nop_blocks;
+    auto total, n;
     //
     // Message("start, end: %#x, %#x\n", start, end);
     total_junks = 0;
-    if (junks_start_ea == 0) junks_start_ea = end;
-    if (junks_end_ea == 0) junks_end_ea = start;
+    total_merges = 0;
+    total_nop_blocks = 0;
     //
-    de_junks(start, end);
-    // analyse in global scope
-    total_merges = merge_jumps(start, end);
+    do {
+        total = 0;
+        //
+        // stage 1: replace all original junks
+        //
+        n = de_junks(start, end);
+        total_junks = total_junks + n;
+        total = total + n;
+        //
+        // stage 2: merge jumps
+        //
+        n = merge_jumps(start, end);
+        total_merges = total_merges + n;
+        total = total + n;
+        //
+        // stage 3: try gather codes over nops
+        //
+        n = skip_mid_nop(start, end);
+        total_nop_blocks = total_nop_blocks + n;
+        total = total + n;
+        //
+        if (total) AnalyzeArea(MinEA(), MaxEA());
+    } while (total);
     //
-    total_nop_blocks = skip_mid_nop(start, end);
-    //
-    if (total_junks || total_merges) {
-        ReAnalyzeArea(junks_start_ea, junks_end_ea);
-    }
-    //
-    Message("junks range [%#x, %#x]\n", junks_start_ea, junks_end_ea);
-    Message("total junks removed [%#x, %#x]: %d\n", start, end, total_junks);
-    Message("total jumps merged [%#x, %#x]: %d\n", start, end, total_merges);
-    Message("total nop blocks skipped [%#x, %#x]: %d\n", start, end, total_nop_blocks);
-    Message("Command available: DeJunks(MinEA(), MaxEA());\n");
-    Message("Command available: ReAnalyzeArea(junks_start_ea, junks_end_ea);\n");
+    Message("Range: [%#x, %#x)\n", start, end);
+    Message("junks removed: %d\n", total_junks);
+    Message("jumps merged: %d\n", total_merges);
+    Message("nop blocks skipped: %d\n", total_nop_blocks);
+    Message("Command available: DeJunks(start, end)\n");
     Message("Finished!\n");
 }
 
 static main(void)
 {
-    junks_start_ea = MaxEA();
-    junks_end_ea = MinEA();
     DeJunks(MinEA(), MaxEA());
 }

@@ -104,11 +104,11 @@ static read_byte_opnd(ea) {
     return opnd;
 }
 
-static has_prev_nbr_code(ea) {
+static has_prev_nobreak_code(ea) {
     return RfirstB(ea) == FindCode(ea, SEARCH_UP|SEARCH_NEXT) && RfirstB(ea) != RfirstB0(ea);
 }
 
-static has_next_nbr_code(ea) {
+static has_next_nobreak_code(ea) {
     return Rfirst(ea) == FindCode(ea, SEARCH_DOWN|SEARCH_NEXT) && Rfirst(ea) != Rfirst0(ea);
 }
 

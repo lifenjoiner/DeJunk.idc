@@ -279,7 +279,12 @@ static concat_next_code(cur, code_start, code_end, p_code_param, data_start, dat
         return p_code_param;
     }
     //
-    if (Byte(cur) == 0x90 && has_next_nbr_code(cur)) { // in case
+    if (MakeCode(cur) == 0) { // some codes can't be recognized correctly, especally following a call
+        Message("concat_next_code: MakeCode failed %#x\n", cur);
+        return -1;
+    }
+    //
+    if (Byte(cur) == 0x90) { // in case
         if (p_code_param_jump) { // update jxc operand
             code_param_write_operand(p_code_param_jump, code_param_read_operand(p_code_param_jump) + 1);
         }
@@ -809,14 +814,17 @@ static ReGenFunc(start, end, entry) {
     if (n == -1) return 0;
     //
     Message("cleanup ...\n");
-    del_seg_by_name(HELPER_SEG_NAME);
+    del_seg_by_name(HELPER_SEG_NAME); // kept to allow jmp out
     //
     MakeCode(entry);
-    MakeFunction(entry, GetFunctionAttr(bak_entry, FUNCATTR_END) - seg_delta);
+    //
     AnalyzeArea(start, end);
     //
-    if (substr(func_name, 0, 4) != "sub_") MakeName(entry, func_name);
-    ApplyType(entry, func_tinfo, TINFO_DEFINITE);
+    MakeFunction(entry, n);
+    if (substr(func_name, 0, 4) != "sub_") {
+        MakeName(entry, func_name);
+        ApplyType(entry, func_tinfo, TINFO_DEFINITE);
+    }
     //
     return n - start;
 }
