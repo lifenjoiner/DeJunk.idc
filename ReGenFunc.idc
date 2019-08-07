@@ -140,9 +140,9 @@ static read_comment_ea(ea, min, max) {
     ea = xtol(CommentEx(ea, 0));
     // comment: a1, a2 ...
     if (ea < MinEA()) ea = 0;
-    if (ea < min) ea = 0;
     if (MaxEA() <= ea) ea = 0;
-    if (max <= ea) ea = 0;
+    if (MinEA() < min && ea < min) ea = 0;
+    if (min < max && max <= ea) ea = 0;
     return ea;
 }
 
@@ -503,7 +503,7 @@ static concat_next_jxcto(p_cur, code_start, code_end, p_code_param, data_start, 
 }
 
 static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_end) {
-    auto cur_x, n, opnd, opnd_s;
+    auto cur_x, n, opnd, opnd_s, opnd_e, jump_forward;
     auto p_cur_x, ea, size, unsolved, guess_min, guess_max, op_len;
     auto op_type, op_type_x;
     auto sum_code_param_size_p_start, sum_code_param_size_p_end;
@@ -550,15 +550,24 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
         return -1;
     }
     //
+    opnd_e = 0;
     opnd_s = cur_x + opnd;
+    p_cur_x = read_comment_ea(opnd_s, 0, 0);
+    //
     if (opnd_s < code_start || opnd_s >= code_end) {
-        Message("solve_required_jump: wrong operand %#x => %#x => %#x\n", p_cur, cur, opnd_s);
-        return -1;
+        Message("solve_required_jump: jump out of boundaries %#x => %#x => %#x\n", p_cur, cur, opnd_s);
+        //
+        // not regenerated yet
+        //
+        if (p_cur_x == 0 || data_start <= p_cur_x) return -1;
+        //
+        // the ugly mess function jump out, p_cur_x is the new code ea
+        //
+        // in case of a bad start code, we stored the entry as repeatable comment of data_start
+        opnd_e = xtol(CommentEx(data_start, 1)) - p_cur_x; // +: before this block, -: after this block
+        p_cur_x = data_start;
     }
-    //
-    p_cur_x = read_comment_ea(opnd_s, data_start, data_end);
-    //
-    if (p_cur_x < data_start || p_cur_x > data_end - HELPER_DATA_SIZE) {
+    else if (p_cur_x < data_start || p_cur_x > data_end - HELPER_DATA_SIZE) {
         Message("solve_required_jump: operand ea out of boundaries [%#x, %#x) <-x- %#x <= %#x <= %#x, size[%d]\n",
                 data_start, data_end, p_cur_x, opnd_s, cur_x, HELPER_DATA_SIZE);
         return -1;
@@ -573,6 +582,7 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
     n = 0;
     guess_min = 0;
     guess_max = 0;
+    //
     if (p_cur <= p_cur_x) { // jump forward, exclude start code, exclude dest code
         sum_code_param_size_p_start = p_cur + HELPER_DATA_SIZE;
         sum_code_param_size_p_end = p_cur_x;
@@ -609,9 +619,30 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
     // guess size
     //
     op_len = 1; // SHORT_JMP, NEAR_JMP, SHORT_JXC, drop REPNZ/REP 0xF2/0xF3
+    if (opnd_e > 0) { // the ugly mess function jump out, before this block
+        n = n + opnd_e;
+        guess_min = guess_min + opnd_e;
+        guess_max = guess_max + opnd_e;
+        //
+        jump_forward = -1;
+    }
+    else if (opnd_e < 0) { // after this block
+        n = opnd_e - n;
+        guess_min = opnd_e - guess_max; // <- left, logic changes
+        guess_max = opnd_e - guess_min;
+        //
+        jump_forward = 1;
+    }
+    // opnd_e == 0
+    else if (p_cur > p_cur_x) {
+        jump_forward = -1;
+    }
+    else {
+        jump_forward = 1;
+    }
     //
     if (code_param_read_size(p_cur) <= 0) { // all solved or unsolved jmp
-        if (p_cur > p_cur_x) { // backward, consider the start jump itself
+        if (jump_forward < 0) { // backward, consider the start jump itself
             if (guess_max + unsolved * 4 < 0x7E) { // 0x80 - 0x02
                 op_len = 2;
                 code_param_write_size(p_cur, op_len);
@@ -636,9 +667,9 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
     //
     // save solved new operand
     //
-    if (unsolved == 0) { // all solved, n is the operand for target ordered code
+    if (unsolved == 0 || opnd_e) { // all solved, n is the operand for target ordered code
         //Message("solve_required_jump: new opnd %#x\n", p_cur <= p_cur_x ? n : -n);
-        code_param_write_new_operand(p_cur, p_cur <= p_cur_x ? n : -n);
+        code_param_write_new_operand(p_cur, n * jump_forward);
     }
     //
     return unsolved;
@@ -682,7 +713,6 @@ static gen_code(dst, code_start, code_end, p_cur, data_start, data_end, seg_delt
     if (p_cur > data_end - HELPER_DATA_SIZE) return dst; // finished
     //
     if (cur < code_start || cur >= code_end) {
-        Message("p_cur, data_end: %#x, %#x\n", p_cur, data_end);
         Message("gen_code: code ea out of boundaries [%#x, %#x) <-x- %#x\n", code_start, code_end, cur);
         return -1;
     }
@@ -695,11 +725,12 @@ static gen_code(dst, code_start, code_end, p_cur, data_start, data_end, seg_delt
     op_type = code_param_read_type(p_cur);
     opnd = code_param_read_new_operand(p_cur);
     //
-    /*
-    cur_x = cur;
-    op = Byte(cur_x);
-    if ((op_type == SHORT_JMP || op_type == NEAR_JMP) && (op == 0xF2 || op == 0xF3)) cur_x++; // drop REP for jmp
-    */
+    if (dst + size > code_end - seg_delta) {
+        Message("gen_code: no enough space %#x <~ %#x <- %#x\n", dst, cur, p_cur);
+        return -1;
+    }
+    //
+    write_comment_ea(cur, dst); // for jump from the ugly mess functions
     //
     if (op_type == NORMAL) {
         copy_bytes(dst, cur, size); // drop REP for jmp
@@ -784,6 +815,8 @@ static ReGenFunc(start, end, entry) {
     if (helper_seg_start <= 0) return 0;
     helper_seg_end = SegEnd(helper_seg_start);
     //
+    MakeRptCmt(helper_seg_start, "0x"+ ltoa(entry, 16)); // store entry
+    //
     cleanup_area(helper_seg_start, helper_seg_end); // in case last remains
     //
     Message("concat_next_code ...\n");
@@ -818,7 +851,7 @@ static ReGenFunc(start, end, entry) {
     //
     MakeCode(entry);
     //
-    AnalyzeArea(start, end);
+    AnalyzeArea(MinEA(), MaxEA());
     //
     MakeFunction(entry, n);
     if (substr(func_name, 0, 4) != "sub_") {
