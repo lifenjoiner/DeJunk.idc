@@ -16,7 +16,7 @@
 
 static is_FF_r(ea, ro) {
     auto op = Byte(ea);
-    if (op == 0xFF && Byte(ea + 1) >> 3 & 7 == ro) return 2;
+    if (op == 0xFF && (Byte(ea + 1) >> 3 & 7) == ro) return 2;
     return 0;
 }
 

@@ -58,6 +58,13 @@ static nop_bytes(ea, len) {
     for (i = ea + len - 1; i >= ea; i--) PatchByte(i, 0x90);
 }
 
+static remake_callee_function(start, end) {
+    auto ea;
+    for (ea = start; ea < end && ea != BADADDR; ea = FindCode(ea, SEARCH_DOWN|SEARCH_NEXT)) {
+        if (is_near_call(ea)) MakeFunction(ea + 5 + Dword(ea + 1), BADADDR);
+    }
+}
+
 static is_not_xref_block(ea) {
     auto cur;
     // all previous codes have NO xref to
@@ -65,6 +72,15 @@ static is_not_xref_block(ea) {
         ea = cur;
     }
     return cur == BADADDR;
+}
+
+static callee_can_be_moved(start) {
+    auto cur, t;
+    for (cur = RfirstB0(start); cur != BADADDR; cur = RnextB0(start, cur)) {
+        t = XrefType();
+        if (is_near_call_r(cur) || t == fl_CF || t == fl_JF) return 0;
+    }
+    return 1;
 }
 
 /*  skip useless code to reduce the code size
@@ -79,6 +95,8 @@ static fix_opnd_rva(start, opnd_change) {
     counter = 0;
     changed = 0;
     n = 0;
+    //
+    if (callee_can_be_moved(start) == 0) return 0; // call edi
     //
     for (cur = RfirstB0(start); cur != BADADDR; cur = RnextB0(start, cur)) {
         t = XrefType();
@@ -137,7 +155,7 @@ static fix_opnd_rva(start, opnd_change) {
             }
         } else if (t == fl_JF || t == fl_CF) {
             // shouldn't happen
-        }
+        } //else, "call edi", do a pretest!
         //
         if (opnd_change != 0 && n != 0) changed++;
         // nopped xref-from without xref-to
@@ -566,6 +584,8 @@ static DeJunks(start, end)
         //
         if (total) AnalyzeArea(MinEA(), MaxEA());
     } while (total);
+    //
+    remake_callee_function(MinEA(), MaxEA());
     //
     Message("Range: [%#x, %#x)\n", start, end);
     Message("junks removed: %d\n", total_junks);
