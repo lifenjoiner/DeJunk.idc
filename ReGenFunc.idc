@@ -156,6 +156,14 @@ static write_comment_ea(ea, v) {
     MakeComm(ea, "0x"+ ltoa(v, 16));
 }
 
+static get_space_for_comment_ea(start, end) {
+    auto ea;
+    for (ea = start; ea < end && ea != BADADDR; ea = FindCode(ea, SEARCH_DOWN|SEARCH_NEXT)) {
+        if (Byte(ea) == 0x90 && read_comment_ea(ea, 0, 0) == 0) return ea;
+    }
+    return -1;
+}
+
 //
 
 #define HELPER_DATA_SIZE 15
@@ -376,7 +384,27 @@ static concat_next_code(cur, code_start, code_end, p_code_param, data_start, dat
     // If current is not an existing end, for the last, overwrite jmp code_param or update jcc operand.
     // All others, run next round recursively ...
     //
-    if (data_start <= p_code_param_x && p_code_param_x < p_code_param) return p_code_param; //exist in the trunk
+    if (data_start <= p_code_param_x && p_code_param_x < p_code_param) { //exist in the trunk
+        if (p_code_param_jump) { // from jcc
+            return p_code_param;
+        }
+        else { // from normal code following jcc, need extra jmp
+            opnd = get_space_for_comment_ea(code_start, code_end); // need to store comment_ea
+            if (opnd == -1) {
+                Message("concat_next_code: can't add jmp for %#x -> %#x\n", p_code_param, p_code_param_x);
+                return -1;
+            }
+            //
+            op_type = NEAR_JMP;
+            n = 0;
+            opnd_s = cur;
+            cur = opnd;
+            opnd = opnd_s - cur;
+            new_len = 0;
+            //
+            return write_code_param(p_code_param, cur, n, opnd, op_type, new_len, 0);
+        }
+    }
     //
     // new, not exist in the trunk
     //
@@ -395,18 +423,19 @@ static concat_next_code(cur, code_start, code_end, p_code_param, data_start, dat
     //
     if (is_retn(cur)) return p_code_param_n;
     //
-    p_code_param_x = read_comment_ea(opnd_s, data_start, data_end);
-    if ((op_type == SHORT_JMP || op_type == NEAR_JMP) && p_code_param_x < data_start) { // jmp to new
-        p_code_param_n = p_code_param_n - HELPER_DATA_SIZE; // move backward, overwrite
-    }
-    //
-    // prepare for recurring
-    //
-    if (op_type != SHORT_JMP && op_type != NEAR_JMP) { // stop delivery for non-jump
-        p_code_param_jump_n = 0;
-    }
-    else {
-        p_code_param_jump_n = p_code_param_jump; // delivery through current jmp, middle jmp params are overwritten
+    p_code_param_jump_n = 0;
+    p_code_param_x = read_comment_ea(opnd_s, 0, p_code_param); // could be jmpout to regenerated ea
+    if (op_type == SHORT_JMP || op_type == NEAR_JMP) {
+        if (p_code_param_x == 0) { // jmp to new, since the first to the last
+            p_code_param_n = p_code_param; // move backward, overwrite
+        } // jmp to exist need fall to fix jcc caller
+        // trunk or regenerated
+        else if (p_code_param_jump) { // delivery through current jmp, middle jmp params are overwritten
+            p_code_param_jump_n = p_code_param_jump;
+        }
+        else { // necessary jmp, initial
+            p_code_param_jump_n = p_code_param;
+        }
     }
     //
     // recur
@@ -463,12 +492,12 @@ static concat_next_jxcto(p_cur, code_start, code_end, p_code_param, data_start, 
     //Message("concat_next_jxcto: p_cur %#x -> code ea %#x ~> p_dst %#x\n", p_cur, cur, p_code_param);
     //
     if (p_code_param < data_start || p_code_param > data_end - HELPER_DATA_SIZE) {
-        Message("concat_next_code: data ea out of boundaries [%#x, %#x) <-x- %#x <= %#x, size[%d]\n",
+        Message("concat_next_jxcto: data ea out of boundaries [%#x, %#x) <-x- %#x <= %#x, size[%d]\n",
                 data_start, data_end, p_code_param, cur, HELPER_DATA_SIZE);
         return -1;
     }
     if (cur < code_start || cur >= code_end) {
-        Message("concat_next_code: code ea out of boundaries [%#x, %#x) <-x- %#x\n", code_start, code_end, cur);
+        Message("concat_next_jxcto: code ea out of boundaries [%#x, %#x) <-x- %#x\n", code_start, code_end, cur);
         return -1;
     }
     //
@@ -596,6 +625,7 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
     else { // jump backward, include dest code, include start code (examine separately)
         sum_code_param_size_p_start = p_cur_x;
         sum_code_param_size_p_end = p_cur; // + HELPER_DATA_SIZE;
+        if (opnd_e < 0) sum_code_param_size_p_end = p_cur + HELPER_DATA_SIZE; // jump out forward indeed
     }
     // sum_code_param_size
     for (ea = sum_code_param_size_p_start; ea < sum_code_param_size_p_end; ea = ea + HELPER_DATA_SIZE) {
