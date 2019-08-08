@@ -54,7 +54,7 @@ static cleanup_area(start, end) {
 
 static cleanup_area_comment(start, end) {
     auto ea, i = 0;
-    for (ea = start; ea != BADADDR; ea = FindCode(ea, SEARCH_DOWN|SEARCH_NEXT)) {
+    for (ea = start; ea != BADADDR && ea < end; ea = FindCode(ea, SEARCH_DOWN|SEARCH_NEXT)) {
         MakeComm(ea, "");
         i++;
     }
@@ -79,49 +79,55 @@ static del_seg_by_name(seg_name) {
 }
 
 static add_seg_cus(size, seg_name, for_ea) {
-    auto new_seg_start = seg_start_by_name(seg_name);
+    auto new_seg_start;
     //
-    if (new_seg_start == -1) {
-        new_seg_start = MaxEA();
-        if (!AddSegEx(new_seg_start, new_seg_start + size,
-                GetSegmentAttr(for_ea, SEGATTR_SEL),
-                GetSegmentAttr(for_ea, SEGATTR_BITNESS),
-                GetSegmentAttr(for_ea, SEGATTR_ALIGN) | ADDSEG_FILLGAP,
-                GetSegmentAttr(for_ea, SEGATTR_COMB),
-                ADDSEG_QUIET)
-        ) {
-            return -1;
-        }
-        if (!RenameSeg(new_seg_start, seg_name)) {
-            DelSeg(new_seg_start, SEGMOD_KILL | SEGMOD_SILENT);
-            return -1;
-        }
+    new_seg_start = MaxEA();
+    if (!AddSegEx(new_seg_start, new_seg_start + size,
+            GetSegmentAttr(for_ea, SEGATTR_SEL),
+            GetSegmentAttr(for_ea, SEGATTR_BITNESS),
+            GetSegmentAttr(for_ea, SEGATTR_ALIGN) | ADDSEG_FILLGAP,
+            GetSegmentAttr(for_ea, SEGATTR_COMB),
+            ADDSEG_QUIET)
+    ) {
+        return -1;
+    }
+    if (!RenameSeg(new_seg_start, seg_name)) {
+        DelSeg(new_seg_start, SEGMOD_KILL | SEGMOD_SILENT);
+        return -1;
     }
     //
     return seg_start_by_name(seg_name); // truncate start or fill gap
 }
 
-static backup_func(start, end, entry) {
-    auto backup_seg_start, seg_delta, ea;
-    auto back_name;
+static backup_all() {
+    auto start, end, backup_seg_start, seg_delta;
     //
-    backup_seg_start = add_seg_cus(MaxEA() - MinEA(), BACKUP_SEG_NAME, start); // all in one named seg
+    start = MinEA();
+    end = MaxEA();
+    backup_seg_start = add_seg_cus(end - start, BACKUP_SEG_NAME, start); // all in one named seg
     if (backup_seg_start == -1) return -1;
     //
-    seg_delta = backup_seg_start - MinEA();
-    //
-    back_name = BACKUP_SEG_NAME + ltoa(start, 16);
-    if (GetFunctionCmt(start + seg_delta, 0) == back_name) return backup_seg_start;
-    //
+    seg_delta = backup_seg_start - start;
     copy_bytes(start + seg_delta, start, end - start);
-    //
-    ea = entry + seg_delta;
-    MakeCode(ea);
-    MakeFunction(ea, GetFunctionAttr(entry, FUNCATTR_END) + seg_delta);
     AnalyzeArea(start + seg_delta, end + seg_delta);
-    SetFunctionCmt(ea, back_name, 0);
     //
     return backup_seg_start;
+}
+
+static backup_func_attr(start, end, entry, seg_delta) {
+    auto backup_entry;
+    auto back_name;
+    //
+    backup_entry = entry + seg_delta;
+    back_name = BACKUP_SEG_NAME + ltoa(entry, 16);
+    if (GetFunctionCmt(backup_entry, 0) == back_name) return;
+    //
+    MakeCode(backup_entry);
+    AnalyzeArea(start + seg_delta, end + seg_delta);
+    MakeFunction(backup_entry, GetFunctionAttr(entry, FUNCATTR_END) + seg_delta);
+    SetFunctionCmt(backup_entry, back_name, 0);
+    //
+    return;
 }
 
 static restore_func(start, end) {
@@ -627,9 +633,9 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
         jump_forward = -1;
     }
     else if (opnd_e < 0) { // after this block
-        n = opnd_e - n;
-        guess_min = opnd_e - guess_max; // <- left, logic changes
-        guess_max = opnd_e - guess_min;
+        n = -opnd_e - n;
+        guess_min = -opnd_e - guess_max; // <- left, logic changes
+        guess_max = -opnd_e - guess_min;
         //
         jump_forward = 1;
     }
@@ -667,8 +673,9 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
     //
     // save solved new operand
     //
-    if (unsolved == 0 || opnd_e) { // all solved, n is the operand for target ordered code
-        //Message("solve_required_jump: new opnd %#x\n", p_cur <= p_cur_x ? n : -n);
+    //Message("solve_required_jump: p_cur min, solid, max, unsolved, forward: %#x %#x %#x %#x %d %d\n", p_cur, guess_min, n, guess_max, unsolved, jump_forward);
+    if (unsolved == 0) { // all solved, n is the operand for target ordered code
+        //Message("solve_required_jump: new opnd %#x\n", n * jump_forward);
         code_param_write_new_operand(p_cur, n * jump_forward);
     }
     //
@@ -703,6 +710,17 @@ static solve_required_jump(code_start, code_end, p_cur, data_start, data_end) {
         unsolved_o = unsolved;
     }
     return unsolved;
+}
+
+static show_unsolved_jump(data_start, data_end) {
+    auto p_data, op_type;
+    for (p_data = data_start; p_data < data_end; p_data = p_data + HELPER_DATA_SIZE) {
+        op_type = code_param_read_type(p_data);
+        if (op_type != SHORT_JXC && op_type != SHORT_JMP && op_type != NEAR_JMP && op_type != NEAR_JXC) continue;
+        if (code_param_read_size(p_data) == 0 || code_param_read_new_operand(p_data) == 0) {
+            Message("unsolved jump: %#x\n", p_data);
+        }
+    }
 }
 
 static gen_code(dst, code_start, code_end, p_cur, data_start, data_end, seg_delta) {
@@ -789,19 +807,36 @@ static gen_code(dst, code_start, code_end, p_cur, data_start, data_end, seg_delt
         }
     }
     //
+    MakeCode(dst - size);
+    //
     return gen_code(dst, code_start, code_end, p_cur + HELPER_DATA_SIZE, data_start, data_end, seg_delta);
 }
 
 static ReGenFunc(start, end, entry) {
     auto bak_start, bak_end, bak_entry, seg_delta;
     auto helper_seg_start, helper_seg_end, helper_cur;
-    auto n = 0, func_name, func_tinfo;
+    auto n, func_name, func_tinfo;
     //
-    Message("backup_func ...\n");
-    bak_start = backup_func(start, end, entry);
+    Message("backup ...\n");
+    bak_start = seg_start_by_name(BACKUP_SEG_NAME);
+    if (bak_start == -1) bak_start = backup_all();
     if (bak_start == -1) return 0;
     //
-    seg_delta = SegEnd(bak_start) - bak_start;
+    seg_delta = bak_start - MinEA();
+    //
+    if (entry == -1) entry = start;
+    else if (entry < start || end <= entry) {
+        Message("wrong entry: [%#x, %#x) <-x- %#x\n", start, end, entry);
+        return 0;
+    }
+    //
+    func_name = "";
+    if (entry == GetFunctionAttr(entry, FUNCATTR_START)) { // is function, not Fchunk
+        func_name = GetFunctionName(entry);
+        func_tinfo = GetTinfo(entry);
+        backup_func_attr(start, end, entry, seg_delta);
+    }
+    //
     bak_start = start + seg_delta;
     bak_end = end + seg_delta;
     bak_entry = entry + seg_delta;
@@ -811,6 +846,7 @@ static ReGenFunc(start, end, entry) {
     Message("cleanup_area_comment total codes %d ...\n", n);
     //
     Message("add_seg_cus ...\n");
+    del_seg_by_name(HELPER_SEG_NAME);
     helper_seg_start = add_seg_cus(n * HELPER_DATA_SIZE, HELPER_SEG_NAME, start);
     if (helper_seg_start <= 0) return 0;
     helper_seg_end = SegEnd(helper_seg_start);
@@ -833,11 +869,9 @@ static ReGenFunc(start, end, entry) {
     n = solve_required_jump(bak_entry, bak_end, helper_seg_start, helper_seg_start, helper_cur);
     if (n) {
         Message("solve_required_jump: unsolved jcc count: %d\n", n);
+        show_unsolved_jump(helper_seg_start, helper_cur);
         return 0;
     }
-    //
-    func_name = GetFunctionName(entry);
-    func_tinfo = GetTinfo(entry);
     //
     Message("cleanup_area(%#x, %#x) ...\n", start, end);
     cleanup_area(start, end);
@@ -853,10 +887,13 @@ static ReGenFunc(start, end, entry) {
     //
     AnalyzeArea(MinEA(), MaxEA());
     //
-    MakeFunction(entry, n);
-    if (substr(func_name, 0, 4) != "sub_") {
-        MakeName(entry, func_name);
-        ApplyType(entry, func_tinfo, TINFO_DEFINITE);
+    if (func_name != "") {
+        MakeFunction(entry, BADADDR); // could fail
+        SetFunctionEnd(entry, n);
+        if (substr(func_name, 0, 4) != "sub_") {
+            MakeName(entry, func_name);
+            ApplyType(entry, func_tinfo, TINFO_DEFINITE);
+        }
     }
     //
     return n - start;
@@ -864,7 +901,7 @@ static ReGenFunc(start, end, entry) {
 
 static main(void)
 {
-    Message("ReGenFunc(start, end, entry)\n");
+    Message("ReGenFunc(start, end, entry) // entry: -1, use start\n");
     Message("RestoreFunc(start, end) // backup is better\n");
     Message("del_seg_by_name(SEG_NAME)\n");
 }
