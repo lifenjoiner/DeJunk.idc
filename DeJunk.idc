@@ -130,7 +130,7 @@ static fix_opnd_rva(start, opnd_change) {
                 if (n != -opnd) {
                     retn = retn + fix_opnd_rva(cur, n + opnd);
                 }
-            } else if ( n = is_short_jxc(cur_x) ) {
+            } else if ( n = is_short_jxc(cur_x) + is_loopx(cur_x) ) { // "or" doesn't work
                 n = n + cur_x - cur;
                 opnd = patch_byte_operand(cur, n, opnd_change, t);
                 if ( !opnd ) continue;

@@ -22,7 +22,7 @@ static is_FF_r(ea, ro) {
 
 static is_short_jmp(ea) {
     auto op = Byte(ea);
-    if ( op == 0xEB ) return 1;
+    if (op == 0xEB) return 1;
     return 0;
 }
 
@@ -93,6 +93,13 @@ static is_call(ea) {
 static is_retn(ea) {
     auto op = Byte(ea);
     if (op == 0xC3 || op == 0xCB || op == 0xC2 || op == 0xCA || op == 0xCF) return 1;
+    return 0;
+}
+
+//
+static is_loopx(ea) {
+    auto op = Byte(ea);
+    if (0xE0 <= op && op <= 0xE2) return 1;
     return 0;
 }
 
