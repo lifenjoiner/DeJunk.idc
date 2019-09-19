@@ -925,7 +925,7 @@ static ReGenFuncEx(start, end, entry, greedy_end) {
     //
     Message("add_seg_cus ...\n");
     del_seg_by_name(HELPER_SEG_NAME);
-    helper_seg_start = add_seg_cus(n * HELPER_DATA_SIZE, HELPER_SEG_NAME, start);
+    helper_seg_start = add_seg_cus((n + 1) * HELPER_DATA_SIZE, HELPER_SEG_NAME, start);
     if (helper_seg_start <= 0) return 0;
     helper_seg_end = SegEnd(helper_seg_start);
     //
