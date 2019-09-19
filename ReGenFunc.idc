@@ -266,8 +266,8 @@ static write_code_param(ea, ea_code, old_size, operand, op_type, size, operand_n
     code_param: {
         DWORD ea;
         Byte old_size;  // store to avoid reparse
-        Byte op_type;
         DWORD jxx_opnd;
+        Byte op_type;
         Byte size;
         DWORD new_jxx_opnd;
     }
@@ -275,7 +275,7 @@ static write_code_param(ea, ea_code, old_size, operand, op_type, size, operand_n
     If current is not an existing end, for the last, overwrite jmp code_param or update jcc operand.
 */
 
-static concat_next_code(cur, code_start, code_end, p_code_param, data_start, data_end, p_code_param_jump) {
+static concat_next_code(cur, code_start, code_end, p_code_param, data_start, data_end, p_code_param_jump, greedy_end) {
     auto op, cur_x, n, new_len, opnd, opnd_s, opnd_i;
     auto p_code_param_x, p_code_param_o, p_code_param_n;
     auto op_type, op_type_o;
@@ -288,7 +288,10 @@ static concat_next_code(cur, code_start, code_end, p_code_param, data_start, dat
                 data_start, data_end, p_code_param, cur, HELPER_DATA_SIZE);
         return -1;
     }
-    if (cur < code_start || cur >= code_end) {
+    if (greedy_end > 0) {
+        if (cur == greedy_end) return p_code_param; // force end for merging enclave code pieces
+    }
+    else if (cur < code_start || cur >= code_end) {
         Message("concat_next_code: code ea out of boundaries [%#x, %#x) <-x- %#x\n", code_start, code_end, cur);
         // special end: call ExitProcess, jmp OEP?
         return p_code_param;
@@ -303,7 +306,7 @@ static concat_next_code(cur, code_start, code_end, p_code_param, data_start, dat
         if (p_code_param_jump) { // update jxc operand
             code_param_write_operand(p_code_param_jump, code_param_read_operand(p_code_param_jump) + 1);
         }
-        return concat_next_code(cur + 1, code_start, code_end, p_code_param, data_start, data_end, p_code_param_jump);
+        return concat_next_code(cur + 1, code_start, code_end, p_code_param, data_start, data_end, p_code_param_jump, greedy_end);
     }
     //
     cur_x = cur;
@@ -431,6 +434,8 @@ static concat_next_code(cur, code_start, code_end, p_code_param, data_start, dat
     //
     p_code_param_n = write_code_param(p_code_param, cur, n, opnd, op_type, new_len, 0); // new, moved forward
     //
+    // good end
+    //
     if (is_retn(cur)) return p_code_param_n;
     //
     p_code_param_jump_n = 0;
@@ -455,14 +460,18 @@ static concat_next_code(cur, code_start, code_end, p_code_param, data_start, dat
     // jmp to trunk from normal code is kept when fallbak.
     // jmp to new code from normal code is skipped when fallbak.
     //
-    p_code_param_x = concat_next_code(opnd_s, code_start, code_end, p_code_param_n, data_start, data_end, p_code_param_jump_n);
+    p_code_param_x = concat_next_code(opnd_s, code_start, code_end, p_code_param_n, data_start, data_end, p_code_param_jump_n, greedy_end);
     //
     // fallback
     //
     if (p_code_param_x == -1) return -1;
     if (p_code_param_n < p_code_param_x - HELPER_DATA_SIZE) return p_code_param_x; // appended more than 1 codes
     //
-    // only 1 code appended
+    // jumpout to new, but outof function range, 0 code appended, keep the jmp
+    //
+    if (p_code_param == p_code_param_x) return p_code_param_x + HELPER_DATA_SIZE;
+    //
+    // only 1 code appended, jumping to exist code appends a jmp
     //
     if (p_code_param_n < p_code_param_x) p_code_param_n = p_code_param_x;
     //
@@ -491,7 +500,7 @@ static concat_next_code(cur, code_start, code_end, p_code_param, data_start, dat
 }
 
 // based on concat_next_code p_code_param
-static concat_next_jxcto(p_cur, code_start, code_end, p_code_param, data_start, data_end) {
+static concat_next_jxcto(p_cur, code_start, code_end, p_code_param, data_start, data_end, greedy_end) {
     auto cur, cur_x, op_type, n;
     auto p_code_param_x, p_code_param_n;
     //
@@ -506,7 +515,10 @@ static concat_next_jxcto(p_cur, code_start, code_end, p_code_param, data_start, 
                 data_start, data_end, p_code_param, cur, HELPER_DATA_SIZE);
         return -1;
     }
-    if (cur < code_start || cur >= code_end) {
+    if (greedy_end > 0) {
+        if (cur == greedy_end) return p_code_param; // force end for merging enclave code pieces
+    }
+    else if (cur < code_start || cur >= code_end) {
         Message("concat_next_jxcto: code ea out of boundaries [%#x, %#x) <-x- %#x\n", code_start, code_end, cur);
         return -1;
     }
@@ -516,7 +528,7 @@ static concat_next_jxcto(p_cur, code_start, code_end, p_code_param, data_start, 
     //
     // is jcc?
     if (op_type != SHORT_JXC && op_type != NEAR_JXC) { // skip others which already have been processed
-        return concat_next_jxcto(p_cur + HELPER_DATA_SIZE, code_start, code_end, p_code_param, data_start, data_end);
+        return concat_next_jxcto(p_cur + HELPER_DATA_SIZE, code_start, code_end, p_code_param, data_start, data_end, greedy_end);
     }
     //
     n = code_param_read_old_size(p_cur);
@@ -537,17 +549,17 @@ static concat_next_jxcto(p_cur, code_start, code_end, p_code_param, data_start, 
     // handle it to concat_next_code
     //
     cur_x = cur_x + code_param_read_operand(p_cur);
-    p_code_param_n = concat_next_code(cur_x, code_start, code_end, p_code_param, data_start, data_end, p_cur);
+    p_code_param_n = concat_next_code(cur_x, code_start, code_end, p_code_param, data_start, data_end, p_cur, greedy_end);
     //
     if (p_code_param_n == -1) return -1;
     if (p_code_param < p_code_param_n) p_code_param = p_code_param_n;
     //
     // next main flow code in trunk
     //
-    return concat_next_jxcto(p_cur + HELPER_DATA_SIZE, code_start, code_end, p_code_param, data_start, data_end);
+    return concat_next_jxcto(p_cur + HELPER_DATA_SIZE, code_start, code_end, p_code_param, data_start, data_end, greedy_end);
 }
 
-static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_end) {
+static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_end, greedy_end) {
     auto cur_x, n, opnd, opnd_s, opnd_e, jump_forward;
     auto p_cur_x, ea, size, unsolved, guess_min, guess_max, code_len;
     auto op_type, op_type_x;
@@ -562,7 +574,10 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
                 data_start, data_end, p_cur, cur, HELPER_DATA_SIZE);
         return -1;
     }
-    if (cur < code_start || cur >= code_end) {
+    if (greedy_end > 0) {
+        if (cur == greedy_end) return p_cur; // force end for merging enclave code pieces
+    }
+    else if (cur < code_start || cur >= code_end) {
         Message("solve_required_jump: code ea out of boundaries [%#x, %#x) <-x- %#x\n", code_start, code_end, cur);
         return -1;
     }
@@ -674,8 +689,9 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
     }
     else if (opnd_e < 0) { // after this block
         n = -opnd_e - n;
+        jump_forward = guess_min;
         guess_min = -opnd_e - guess_max; // <- left, logic changes
-        guess_max = -opnd_e - guess_min;
+        guess_max = -opnd_e - jump_forward;
         //
         jump_forward = 1;
     }
@@ -727,7 +743,7 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
     return unsolved;
 }
 
-static solve_required_jump_m(code_start, code_end, p_cur, data_start, data_end) {
+static solve_required_jump_m(code_start, code_end, p_cur, data_start, data_end, greedy_end) {
     auto cur, p_cur_n;
     auto n, unsolved;
     //
@@ -738,7 +754,7 @@ static solve_required_jump_m(code_start, code_end, p_cur, data_start, data_end) 
     while (p_cur = p_cur_n, data_start <= p_cur && p_cur < data_end) {
         p_cur_n = p_cur + HELPER_DATA_SIZE;
         cur = code_param_read_ea(p_cur);
-        n = solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_end);
+        n = solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_end, greedy_end);
         if (n < 0) return -1;
         unsolved = unsolved + n;
     }
@@ -746,11 +762,11 @@ static solve_required_jump_m(code_start, code_end, p_cur, data_start, data_end) 
     return unsolved;
 }
 
-static solve_required_jump(code_start, code_end, p_cur, data_start, data_end) {
+static solve_required_jump(code_start, code_end, p_cur, data_start, data_end, greedy_end) {
     auto unsolved, unsolved_o;
     //
     unsolved_o = 0x7FFFFFFF;
-    while ((unsolved = solve_required_jump_m(code_start, code_end, p_cur, data_start, data_end)) > 0 && unsolved < unsolved_o) {
+    while ((unsolved = solve_required_jump_m(code_start, code_end, p_cur, data_start, data_end, greedy_end)) > 0 && unsolved < unsolved_o) {
         //Message("solve_required_jump: left %d\n", unsolved);
         unsolved_o = unsolved;
     }
@@ -768,14 +784,17 @@ static show_unsolved_jump(data_start, data_end) {
     }
 }
 
-static gen_code(dst, code_start, code_end, p_cur, data_start, data_end, seg_delta) {
+static gen_code(dst, code_start, code_end, p_cur, data_start, data_end, seg_delta, greedy_end) {
     auto cur, size, op_type, opnd;
     //
     cur = code_param_read_ea(p_cur);
     //
     if (p_cur > data_end - HELPER_DATA_SIZE) return dst; // finished
     //
-    if (cur < code_start || cur >= code_end) {
+    if (greedy_end > 0) {
+        if (cur == greedy_end) return p_cur; // force end for merging enclave code pieces
+    }
+    else if (cur < code_start || cur >= code_end) {
         Message("gen_code: code ea out of boundaries [%#x, %#x) <-x- %#x\n", code_start, code_end, cur);
         return -1;
     }
@@ -860,10 +879,15 @@ static gen_code(dst, code_start, code_end, p_cur, data_start, data_end, seg_delt
     //
     MakeCode(dst - size);
     //
-    return gen_code(dst, code_start, code_end, p_cur + HELPER_DATA_SIZE, data_start, data_end, seg_delta);
+    return gen_code(dst, code_start, code_end, p_cur + HELPER_DATA_SIZE, data_start, data_end, seg_delta, greedy_end);
 }
 
 static ReGenFunc(start, end, entry) {
+    return ReGenFuncEx(start, end, entry, 0);
+}
+
+// greedy_end: explicit end of function while having enclave code piece, separated by other functions, jumpout/jumpback
+static ReGenFuncEx(start, end, entry, greedy_end) {
     auto bak_start, bak_end, bak_entry, seg_delta;
     auto helper_seg_start, helper_seg_end, helper_cur;
     auto n, func_name, func_tinfo;
@@ -892,6 +916,9 @@ static ReGenFunc(start, end, entry) {
     bak_end = end + seg_delta;
     bak_entry = entry + seg_delta;
     //
+    if (greedy_end == -1) greedy_end = bak_end;
+    else if (greedy_end > 0) greedy_end = greedy_end + seg_delta;
+    //
     Message("cleanup_area_comment ...\n");
     n = cleanup_area_comment(bak_start, bak_end);
     Message("cleanup_area_comment total codes %d ...\n", n);
@@ -907,17 +934,17 @@ static ReGenFunc(start, end, entry) {
     cleanup_area(helper_seg_start, helper_seg_end); // in case last remains
     //
     Message("concat_next_code ...\n");
-    helper_cur = concat_next_code(bak_entry, bak_start, bak_end, helper_seg_start, helper_seg_start, helper_seg_end, 0);
+    helper_cur = concat_next_code(bak_entry, bak_start, bak_end, helper_seg_start, helper_seg_start, helper_seg_end, 0, greedy_end);
     if (helper_cur <= 0) return 0;
     //
     Message("concat_next_jxcto: ...\n");
-    helper_cur = concat_next_jxcto(helper_seg_start, bak_start, bak_end, helper_cur, helper_seg_start, helper_seg_end);
+    helper_cur = concat_next_jxcto(helper_seg_start, bak_start, bak_end, helper_cur, helper_seg_start, helper_seg_end, greedy_end);
     if (helper_cur <= 0) return 0;
     //
     // helper_cur is the code_param end bound
     //
     Message("solve_required_jump ...\n");
-    n = solve_required_jump(bak_entry, bak_end, helper_seg_start, helper_seg_start, helper_cur);
+    n = solve_required_jump(bak_entry, bak_end, helper_seg_start, helper_seg_start, helper_cur, greedy_end);
     if (n) {
         Message("solve_required_jump: unsolved jcc count: %d\n", n);
         show_unsolved_jump(helper_seg_start, helper_cur);
@@ -928,7 +955,7 @@ static ReGenFunc(start, end, entry) {
     cleanup_area(start, end);
     //
     Message("gen_code ...\n");
-    n = gen_code(entry, bak_start, bak_end, helper_seg_start, helper_seg_start, helper_cur, seg_delta);
+    n = gen_code(entry, bak_start, bak_end, helper_seg_start, helper_seg_start, helper_cur, seg_delta, greedy_end);
     if (n == -1) return 0;
     //
     Message("cleanup ...\n");
@@ -955,4 +982,5 @@ static main(void)
     Message("ReGenFunc(start, end, entry) // entry: -1, use start\n");
     Message("RestoreFunc(start, end) // backup is better\n");
     Message("del_seg_by_name(SEG_NAME)\n");
+    Message("ReGenFuncEx(start, end, entry, greedy_end) // greedy_end: force end for merging enclave codes; -1 , use end\n");
 }
