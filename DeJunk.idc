@@ -330,7 +330,7 @@ static cancel_junk_block_attr(from, to) {
     if (from <= ea && ea < to) DelCodeXref(ea, to, 0);
 }
 
-static de_junk(start, end, junk_sig, len_sig, len_operand, tail, len_tail)
+static de_junk(start, end, force, junk_sig, len_sig, len_operand, tail, len_tail)
 {
     auto ea, ea_x, total;
     auto n, i;
@@ -341,7 +341,7 @@ static de_junk(start, end, junk_sig, len_sig, len_operand, tail, len_tail)
     ea = start - 1;
     while (ea = FindBinary(ea, SEARCH_DOWN|SEARCH_NEXT, junk_sig), ea != BADADDR && ea < end) {
         // don't break parsed code
-        if (ea != FindCode(ea - 1, SEARCH_DOWN|SEARCH_NEXT)) continue;
+        if (force == 0 && ea != FindCode(ea - 1, SEARCH_DOWN|SEARCH_NEXT)) continue;
         //
         //Message("Sig-ea: %#x\n", ea);
         // GetOperandValue(ea, 0): -1
@@ -366,7 +366,7 @@ static de_junk(start, end, junk_sig, len_sig, len_operand, tail, len_tail)
         i = len_sig + len_operand + n + len_tail;
         ea_x = ea_x + len_tail - 1;
         if (is_call(ea)) flags = 0x8000;
-        while (ea_x = FindCode(ea_x, SEARCH_DOWN|SEARCH_NEXT), ea_x < ea + i) {
+        while (ea_x = FindCode(ea_x, SEARCH_DOWN|SEARCH_NEXT), ea_x < ea + i && ea_x != BADADDR) {
             // further determination on the junk data that can be treated as code
             if (RfirstB0(ea_x) != BADADDR) {
                 flags = flags + 0x1000000;
@@ -484,13 +484,14 @@ Dst:
 //////
 7C 03 EB 03 ?? 74 FB
 
-seg000:00401D3C 7C 03                             jl      short loc_401D41
-seg000:00401D3E EB 1E                             jmp     short loc_401D5E
-seg000:00401D40                   ; ---------------------------------------------------------------------------
-seg000:00401D40 A5                                movsd
-seg000:00401D41
-seg000:00401D41                   loc_401D41:                             ; CODE XREF: seg000:loc_401D3C j
-seg000:00401D41 74 1B                             jz      short loc_401D5E
+seg000:0040B6E0 7C 03                             jl      short loc_40B6E5
+seg000:0040B6E2                   loc_40B6E2:
+seg000:0040B6E2 EB 03                             jmp     short loc_40B6E7
+seg000:0040B6E2                   ; ---------------------------------------------------------------------------
+seg000:0040B6E4 7B                                db 7Bh
+seg000:0040B6E5                   ; ---------------------------------------------------------------------------
+seg000:0040B6E5                   loc_40B6E5:
+seg000:0040B6E5 74 FB                             jz      short loc_40B6E2
 
 //////
     J?      Dst
@@ -499,32 +500,33 @@ seg000:00401D41 74 1B                             jz      short loc_401D5E
 Dst:
 */
 
-//static de_junks(long start, long end);
-// MUST be junk code and not data!
+// simple type
 static de_junks(start, end)
 {
     auto total = 0;
     //
     // block type first, isn't changed by the simple types
-    total = total + de_junk(start, end, "7C 03 EB 03 ?? 74 FB", 7, 0, "", 0);
-    //
-    // call xxx, 'lea esp, [esp+4]'
-    total = total + de_junk(start, end, "F2 E8",    2, 4, "8D 64 24 04", 4);
-    total = total + de_junk(start, end, "F3 E8",    2, 4, "8D 64 24 04", 4);
-    total = total + de_junk(start, end, "E8",       1, 4, "8D 64 24 04", 4);
-    //
-    total = total + de_junk(start, end, "F2 EB",    2, 1, "", 0);
-    total = total + de_junk(start, end, "F3 EB",    2, 1, "", 0);
-    total = total + de_junk(start, end, "EB",       1, 1, "", 0);
-    //
-    total = total + de_junk(start, end, "F8 73",    2, 1, "", 0);
-    total = total + de_junk(start, end, "F9 72",    2, 1, "", 0);
-    total = total + de_junk(start, end, "31 C9 E3", 3, 1, "", 0);
+    total = total + de_junk(start, end, 0, "7C 03 EB 03 ?? 74 FB", 7, 0, "", 0);
+    // call xxx
+    total = total + de_junk(start, end, 0, "F2 E8", 2, 4, "8D 64 24 04", 4); // lea esp, [esp+4]
+    total = total + de_junk(start, end, 0, "F3 E8", 2, 4, "8D 64 24 04", 4);
+    total = total + de_junk(start, end, 0, "E8",    1, 4, "8D 64 24 04", 4);
+    total = total + de_junk(start, end, 0, "E8",    1, 4, "83 C4 04", 3); // add esp, 4
+    total = total + de_junk(start, end, 0, "83 C4 04 E8", 4, 4, "", 0); // add esp, 4
+    // jmp
+    total = total + de_junk(start, end, 0, "F2 EB", 2, 1, "", 0);
+    total = total + de_junk(start, end, 0, "F3 EB", 2, 1, "", 0);
+    total = total + de_junk(start, end, 0, "EB",    1, 1, "", 0);
+    total = total + de_junk(start, end, 0, "E9",    1, 4, "", 0);
+    // jcc
+    total = total + de_junk(start, end, 0, "31 C9 E3", 3, 1, "", 0);
+    total = total + de_junk(start, end, 0, "F8 73", 2, 1, "", 0);
+    total = total + de_junk(start, end, 0, "F9 72", 2, 1, "", 0);
     //
     // sal eax, 0
-    total = total + de_junk(start, end, "C1 F0 00", 3, 0, "", 0);
+    total = total + de_junk(start, end, 0, "C1 F0 00", 3, 0, "", 0);
     // enter 0, 0
-    total = total + de_junk(start, end, "C8 00 00 00", 4, 0, "", 0);
+    total = total + de_junk(start, end, 0, "C8 00 00 00", 4, 0, "", 0);
     //
     return total;
 }
@@ -550,7 +552,32 @@ static de_junks(start, end)
     AskAddr
 */
 
-static DeJunks(start, end)
+static DeJunks_r(start, end, func_dejunks)
+{
+    auto total_junks;
+    auto total;
+    //
+    // Message("start, end: %#x, %#x\n", start, end);
+    total_junks = 0;
+    //
+    // only do binary substitution
+    //
+    do {
+        total = func_dejunks(start, end);
+        total_junks = total_junks + total;
+        AnalyzeArea(MinEA(), MaxEA());
+    } while (total);
+    //
+    remake_callee_function(MinEA(), MaxEA());
+    //
+    Message("Range: [%#x, %#x)\n", start, end);
+    Message("junks removed: %d\n", total_junks);
+    //
+    return total_junks;
+}
+
+// Do the operand fix after all complex pattern junks cleaned and code reanalyzed!
+static DeJunks(start, end, func_dejunks)
 {
     auto ea, ea_start;
     auto total_junks, total_merges, total_nop_blocks;
@@ -566,9 +593,7 @@ static DeJunks(start, end)
         //
         // stage 1: replace all original junks
         //
-        n = de_junks(start, end);
-        total_junks = total_junks + n;
-        total = total + n;
+        total_junks = total_junks + DeJunks_r(start, end, func_dejunks);
         //
         // stage 2: merge jumps
         //
@@ -582,7 +607,7 @@ static DeJunks(start, end)
         total_nop_blocks = total_nop_blocks + n;
         total = total + n;
         //
-        if (total) AnalyzeArea(MinEA(), MaxEA());
+        AnalyzeArea(MinEA(), MaxEA());
     } while (total);
     //
     remake_callee_function(MinEA(), MaxEA());
@@ -591,11 +616,12 @@ static DeJunks(start, end)
     Message("junks removed: %d\n", total_junks);
     Message("jumps merged: %d\n", total_merges);
     Message("nop blocks skipped: %d\n", total_nop_blocks);
-    Message("Command available: DeJunks(start, end)\n");
-    Message("Finished!\n");
 }
 
 static main(void)
 {
-    DeJunks(MinEA(), MaxEA());
+    Message("Command available: DeJunks(MinEA(), MaxEA(), de_junks)\n");
+    Message("Command available: DeJunks_r(MinEA(), MaxEA(), de_junks)\n");
+    Message("Command available: AnalyzeArea(MinEA(), MaxEA())\n");
+    Message("Do de_junks simple pattern after all complex pattern junks cleaned and code reanalyzed!\n");
 }
