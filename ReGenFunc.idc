@@ -199,15 +199,15 @@ static code_param_write_old_size(ea, v) {
     return code_param_write_byte(ea + 4, v);
 }
 
-static code_param_write_operand(ea, v) {
+static code_param_write_old_operand(ea, v) {
     return code_param_write_Dword(ea + 5, v);
 }
 
-static code_param_write_type(ea, v) {
+static code_param_write_old_type(ea, v) {
     return code_param_write_byte(ea + 9, v);
 }
 
-static code_param_write_size(ea, v) {
+static code_param_write_new_size(ea, v) {
     return code_param_write_byte(ea + 10, v);
 }
 
@@ -223,15 +223,15 @@ static code_param_read_old_size(ea) {
     return Byte(ea + 4);
 }
 
-static code_param_read_operand(ea) {
+static code_param_read_old_operand(ea) {
     return Dword(ea + 5);
 }
 
-static code_param_read_type(ea) {
+static code_param_read_old_type(ea) {
     return Byte(ea + 9);
 }
 
-static code_param_read_size(ea) {
+static code_param_read_new_size(ea) {
     return Byte(ea + 10);
 }
 
@@ -244,9 +244,9 @@ static write_code_param(ea, ea_code, old_size, operand, op_type, size, operand_n
     //
     code_param_write_ea(ea, ea_code);
     code_param_write_old_size(ea, old_size);
-    code_param_write_type(ea, op_type);
-    code_param_write_operand(ea, operand);
-    code_param_write_size(ea, size);
+    code_param_write_old_type(ea, op_type);
+    code_param_write_old_operand(ea, operand);
+    code_param_write_new_size(ea, size);
     code_param_write_new_operand(ea, operand_new);
     //
     return ea + HELPER_DATA_SIZE;
@@ -304,7 +304,7 @@ static concat_next_code(cur, code_start, code_end, p_code_param, data_start, dat
     //
     if (Byte(cur) == 0x90) { // in case
         if (p_code_param_jump) { // update jxc operand
-            code_param_write_operand(p_code_param_jump, code_param_read_operand(p_code_param_jump) + 1);
+            code_param_write_old_operand(p_code_param_jump, code_param_read_old_operand(p_code_param_jump) + 1);
         }
         return concat_next_code(cur + 1, code_start, code_end, p_code_param, data_start, data_end, p_code_param_jump, greedy_end);
     }
@@ -427,7 +427,7 @@ static concat_next_code(cur, code_start, code_end, p_code_param, data_start, dat
     //
     if (p_code_param_jump && (op_type == SHORT_JMP || op_type == NEAR_JMP)) {
         opnd = n + opnd; // ori_code_len + operand, overwriten next
-        if (code_param_read_ea(p_code_param) > data_start) opnd = opnd + code_param_read_operand(p_code_param); // get cumulated operand of middle jmps for Jcc
+        if (code_param_read_ea(p_code_param) > data_start) opnd = opnd + code_param_read_old_operand(p_code_param); // get cumulated operand of middle jmps for Jcc
     }
     //
     //Message("concat_next_code: p_code_param <- ea_code, old_size, opnd, op_type, new_size: %#x <- %#x, %#x, %#x, %#x\n", p_code_param, cur, n, opnd, op_type, new_len);
@@ -484,14 +484,14 @@ static concat_next_code(cur, code_start, code_end, p_code_param, data_start, dat
     //  cross-over/loop jumps
     //
     p_code_param_o = p_code_param_jump; // p_code_param_jump is given through jmps by the initial jcc
-    op_type_o = code_param_read_type(p_code_param_o);
-    opnd = code_param_read_operand(p_code_param); // get cumulated operand, 0 is not jump
+    op_type_o = code_param_read_old_type(p_code_param_o);
+    opnd = code_param_read_old_operand(p_code_param); // get cumulated operand, 0 is not jump
     if ((op_type == SHORT_JMP || op_type == NEAR_JMP) && opnd &&
         (op_type_o == SHORT_JXC || op_type_o == NEAR_JXC)
     ) { // also include must-keep jmp
-        opnd = opnd + code_param_read_operand(p_code_param_o); // cumulate only last is jump
+        opnd = opnd + code_param_read_old_operand(p_code_param_o); // cumulate only last is jump
         // update operand, keep comment_ea, move backward
-        code_param_write_operand(p_code_param_o, opnd);
+        code_param_write_old_operand(p_code_param_o, opnd);
         p_code_param_n = p_code_param; // drop the jmp after jcc
         write_code_param(p_code_param, 0, 0, 0, 0, 0, 0); // in case of it's the last one
     }
@@ -524,7 +524,7 @@ static concat_next_jxcto(p_cur, code_start, code_end, p_code_param, data_start, 
     }
     //
     // get op type
-    op_type = code_param_read_type(p_cur);
+    op_type = code_param_read_old_type(p_cur);
     //
     // is jcc?
     if (op_type != SHORT_JXC && op_type != NEAR_JXC) { // skip others which already have been processed
@@ -548,7 +548,7 @@ static concat_next_jxcto(p_cur, code_start, code_end, p_code_param, data_start, 
     //
     // handle it to concat_next_code
     //
-    cur_x = cur_x + code_param_read_operand(p_cur);
+    cur_x = cur_x + code_param_read_old_operand(p_cur);
     p_code_param_n = concat_next_code(cur_x, code_start, code_end, p_code_param, data_start, data_end, p_cur, greedy_end);
     //
     if (p_code_param_n == -1) return -1;
@@ -586,10 +586,10 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
     //
     unsolved = 0;
     //
-    if (code_param_read_size(p_cur) > 0 && code_param_read_new_operand(p_cur)) return unsolved;
+    if (code_param_read_new_size(p_cur) > 0 && code_param_read_new_operand(p_cur)) return unsolved;
     //
     // get op type
-    op_type = code_param_read_type(p_cur);
+    op_type = code_param_read_old_type(p_cur);
     //
     // is jcc or neccessary jmp? ("||" expressions are all executed!)
     if (op_type != SHORT_JXC && op_type != SHORT_JMP && op_type != NEAR_JMP && op_type != NEAR_JXC && op_type != LOOP_X) return unsolved;
@@ -604,7 +604,7 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
     //
     // get jump operand for oringinal code
     //
-    opnd = code_param_read_operand(p_cur);
+    opnd = code_param_read_old_operand(p_cur);
     if (opnd == 0) {
         Message("solve_required_jump: not solved operand of param %#x => %#x\n", p_cur, cur);
         return -1;
@@ -617,7 +617,7 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
     if (opnd_s < code_start || opnd_s >= code_end) {
         Message("solve_required_jump: jump out of boundaries %#x => %#x => %#x\n", p_cur, cur, opnd_s);
         //
-        // not regenerated yet
+        // not *regenerated* yet
         //
         if (p_cur_x == 0 || data_start <= p_cur_x) return -1;
         //
@@ -654,7 +654,7 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
     }
     // sum_code_param_size
     for (ea = sum_code_param_size_p_start; ea < sum_code_param_size_p_end; ea = ea + HELPER_DATA_SIZE) {
-        size = code_param_read_size(ea);
+        size = code_param_read_new_size(ea);
         if (size > 0) {
             n = n + size;
             guess_min = guess_min + size;
@@ -662,7 +662,7 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
         }
         else {
             unsolved++;
-            op_type_x = code_param_read_type(ea);
+            op_type_x = code_param_read_old_type(ea);
             if (op_type_x == SHORT_JMP || op_type_x == NEAR_JMP) {
                 guess_min = guess_min + 1;
                 guess_max = guess_max + 1;
@@ -703,27 +703,26 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
         jump_forward = 1;
     }
     //
-    if (code_param_read_size(p_cur) <= 0) { // all solved or unsolved jmp
+    if (code_param_read_new_size(p_cur) <= 0) { // all solved or unsolved jmp
         if (jump_forward < 0) { // backward, consider the start jump itself
             if (guess_max + unsolved * 4 < 0x7E) { // 0x80 - 0x02
                 code_len = 2;
-                code_param_write_size(p_cur, code_len);
+                code_param_write_new_size(p_cur, code_len);
             }
             else if (guess_min + unsolved >= 0x7E) {
                 if (op_type == SHORT_JXC || op_type == NEAR_JXC) code_len = 2;
                 code_len = code_len + 4;
-                code_param_write_size(p_cur, code_len);
+                code_param_write_new_size(p_cur, code_len);
             }
-            if (unsolved == 0) n = n + code_len; // n == guess_min == guess_max
         }
         else { // forward
             if (guess_max + unsolved * 4 < 0x80) {
                 code_len = 2;
-                code_param_write_size(p_cur, code_len);
+                code_param_write_new_size(p_cur, code_len);
             }
             else if (guess_min + unsolved >= 0x80) {
                 if (op_type == SHORT_JXC || op_type == NEAR_JXC) code_len = 2;
-                code_param_write_size(p_cur, code_len + 4);
+                code_param_write_new_size(p_cur, code_len + 4);
             }
         }
     }
@@ -735,6 +734,9 @@ static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_
         if (op_type == LOOP_X && n > 0x7F) {
             Message("solve_required_jump: wrong opnd for loopx %#x\n", n);
             return -1;
+        }
+        if (jump_forward < 0) { // backward, consider the start jump itself
+            n = n + code_param_read_new_size(p_cur); // <-- get the early decided size! After all middle jumps solved ~
         }
         //Message("solve_required_jump: new opnd %#x\n", n * jump_forward);
         code_param_write_new_operand(p_cur, n * jump_forward);
@@ -776,9 +778,9 @@ static solve_required_jump(code_start, code_end, p_cur, data_start, data_end, gr
 static show_unsolved_jump(data_start, data_end) {
     auto p_data, op_type;
     for (p_data = data_start; p_data < data_end; p_data = p_data + HELPER_DATA_SIZE) {
-        op_type = code_param_read_type(p_data);
+        op_type = code_param_read_old_type(p_data);
         if (op_type != SHORT_JXC && op_type != SHORT_JMP && op_type != NEAR_JMP && op_type != NEAR_JXC) continue;
-        if (code_param_read_size(p_data) == 0 || code_param_read_new_operand(p_data) == 0) {
+        if (code_param_read_new_size(p_data) == 0 || code_param_read_new_operand(p_data) == 0) {
             Message("unsolved jump: %#x\n", p_data);
         }
     }
@@ -799,12 +801,12 @@ static gen_code(dst, code_start, code_end, p_cur, data_start, data_end, seg_delt
         return -1;
     }
     //
-    //Message("gen_code: p_code_param => ea_old -> ea_new size : %#x => %#x -> %#x %#x\n", p_cur, cur, dst, code_param_read_size(p_cur));
+    //Message("gen_code: p_code_param => ea_old -> ea_new size : %#x => %#x -> %#x %#x\n", p_cur, cur, dst, code_param_read_new_size(p_cur));
     //
     // assume all good prepared
     //
-    size = code_param_read_size(p_cur);
-    op_type = code_param_read_type(p_cur);
+    size = code_param_read_new_size(p_cur);
+    op_type = code_param_read_old_type(p_cur);
     opnd = code_param_read_new_operand(p_cur);
     //
     if (dst + size > code_end - seg_delta) {
@@ -820,7 +822,7 @@ static gen_code(dst, code_start, code_end, p_cur, data_start, data_end, seg_delt
     }
     else if (op_type == NEAR_CALL) {
         PatchByte(dst, 0xE8);
-        opnd = code_param_read_operand(p_cur); // original, calculate now
+        opnd = code_param_read_old_operand(p_cur); // original, calculate now
         opnd = opnd + cur - seg_delta - dst;
         PatchDword(dst + 1, opnd); // shouldn't overflow
         //Message("gen_code: near call opnd <- ea_new <= seg_delta <= ea_old : %#x <- %#x <= %#x <= %#x\n", opnd, dst, seg_delta, cur);
