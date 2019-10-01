@@ -465,38 +465,42 @@ static concat_next_code(cur, code_start, code_end, p_code_param, data_start, dat
     // fallback
     //
     if (p_code_param_x == -1) return -1;
-    if (p_code_param_n < p_code_param_x - HELPER_DATA_SIZE) return p_code_param_x; // appended more than 1 codes
     //
     // jumpout to new, but outof function range, 0 code appended, keep the jmp
     //
     if (p_code_param == p_code_param_x) return p_code_param_x + HELPER_DATA_SIZE;
     //
-    // only 1 code appended, jumping to exist code appends a jmp
-    //
-    if (p_code_param_n < p_code_param_x) p_code_param_n = p_code_param_x;
-    //
-    if (!p_code_param_jump) return p_code_param_n; // not from jump
-    //
-    // update jcc operand after falling back
-    // special:
-    //  only appended 1 jmp: jcc + jmp to the trunk, drop jmp, new operand determins updating jcc (or not)
-    //   jcc + jmp to new code, jmp is overwriten by the next, finally can be jmp to the trunk
-    //  cross-over/loop jumps
-    //
-    p_code_param_o = p_code_param_jump; // p_code_param_jump is given through jmps by the initial jcc
-    op_type_o = code_param_read_old_type(p_code_param_o);
-    opnd = code_param_read_old_operand(p_code_param); // get cumulated operand, 0 is not jump
-    if ((op_type == SHORT_JMP || op_type == NEAR_JMP) && opnd &&
-        (op_type_o == SHORT_JXC || op_type_o == NEAR_JXC)
-    ) { // also include must-keep jmp
-        opnd = opnd + code_param_read_old_operand(p_code_param_o); // cumulate only last is jump
-        // update operand, keep comment_ea, move backward
-        code_param_write_old_operand(p_code_param_o, opnd);
-        p_code_param_n = p_code_param; // drop the jmp after jcc
-        write_code_param(p_code_param, 0, 0, 0, 0, 0, 0); // in case of it's the last one
+    if (p_code_param_n == p_code_param_x - HELPER_DATA_SIZE && p_code_param_jump) {
+        //
+        // only 1 code appended, jumping to exist code appends a jmp
+        //
+        // update jcc operand after falling back
+        // special:
+        //  only appended 1 jmp: jcc + jmp to the trunk, drop jmp, new operand determins updating jcc (or not)
+        //   jcc + jmp to new code, jmp is overwriten by the next, finally can be jmp to the trunk
+        //  cross-over/loop jumps
+        //
+        p_code_param_o = p_code_param_jump; // p_code_param_jump is given through jmps by the initial jcc
+        op_type_o = code_param_read_old_type(p_code_param_o);
+        opnd = code_param_read_old_operand(p_code_param); // get cumulated operand, 0 is not jump
+        if ((op_type == SHORT_JMP || op_type == NEAR_JMP) && opnd &&
+            (op_type_o == SHORT_JXC || op_type_o == NEAR_JXC)
+        ) { // also include must-keep jmp
+            opnd = opnd + code_param_read_old_operand(p_code_param_o); // cumulate only last is jump
+            // update operand, keep comment_ea, move backward
+            code_param_write_old_operand(p_code_param_o, opnd);
+            p_code_param_n = p_code_param; // drop the jmp after jcc
+            write_code_param(p_code_param, 0, 0, 0, 0, 0, 0); // in case of it's the last one
+        }
     }
     //
-    return p_code_param_n;
+    // fallback to code is jxx
+    //
+    if (op_type == SHORT_JXC || op_type == NEAR_JXC) { // non jxx goes to return
+        p_code_param_x = concat_next_jxcto(p_code_param, code_start, code_end, p_code_param_x, data_start, data_end, greedy_end);
+    }
+    //
+    return p_code_param_x;
 }
 
 // based on concat_next_code p_code_param
@@ -523,14 +527,6 @@ static concat_next_jxcto(p_cur, code_start, code_end, p_code_param, data_start, 
         return -1;
     }
     //
-    // get op type
-    op_type = code_param_read_old_type(p_cur);
-    //
-    // is jcc?
-    if (op_type != SHORT_JXC && op_type != NEAR_JXC) { // skip others which already have been processed
-        return concat_next_jxcto(p_cur + HELPER_DATA_SIZE, code_start, code_end, p_code_param, data_start, data_end, greedy_end);
-    }
-    //
     n = code_param_read_old_size(p_cur);
     cur_x = cur + n;
     //
@@ -546,17 +542,12 @@ static concat_next_jxcto(p_cur, code_start, code_end, p_code_param, data_start, 
     //
     // need concat
     //
-    // handle it to concat_next_code
+    // handle it by concat_next_code
     //
     cur_x = cur_x + code_param_read_old_operand(p_cur);
     p_code_param_n = concat_next_code(cur_x, code_start, code_end, p_code_param, data_start, data_end, p_cur, greedy_end);
     //
-    if (p_code_param_n == -1) return -1;
-    if (p_code_param < p_code_param_n) p_code_param = p_code_param_n;
-    //
-    // next main flow code in trunk
-    //
-    return concat_next_jxcto(p_cur + HELPER_DATA_SIZE, code_start, code_end, p_code_param, data_start, data_end, greedy_end);
+    return p_code_param_n;
 }
 
 static solve_required_jump_i(cur, code_start, code_end, p_cur, data_start, data_end, greedy_end) {
@@ -937,10 +928,6 @@ static ReGenFuncEx(start, end, entry, greedy_end) {
     //
     Message("concat_next_code ...\n");
     helper_cur = concat_next_code(bak_entry, bak_start, bak_end, helper_seg_start, helper_seg_start, helper_seg_end, 0, greedy_end);
-    if (helper_cur <= 0) return 0;
-    //
-    Message("concat_next_jxcto: ...\n");
-    helper_cur = concat_next_jxcto(helper_seg_start, bak_start, bak_end, helper_cur, helper_seg_start, helper_seg_end, greedy_end);
     if (helper_cur <= 0) return 0;
     //
     // helper_cur is the code_param end bound
