@@ -1,7 +1,7 @@
 /*  DeJunk.idc
     $: Remove junk codes in IDA by IDC
     @: lifenjoiner
-    L: GPL
+    L: MIT
     
     H:
     v0.2.0 20190616

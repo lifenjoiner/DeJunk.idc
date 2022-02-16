@@ -1,7 +1,7 @@
 /*  DeJunk.idc for the simple type junks
     $: Remove junk codes in IDA by IDC
     @: lifenjoiner
-    L: GPL
+    L: MIT
 */
 
 #include "DeJunk.idc"
