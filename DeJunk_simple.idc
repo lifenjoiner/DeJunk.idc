@@ -1,4 +1,4 @@
-/*  DeJunk.idc for the simple type junks
+/*  DeJunk_simple.idc for the simple type junks
     $: Remove junk codes in IDA by IDC
     @: lifenjoiner
     L: MIT
